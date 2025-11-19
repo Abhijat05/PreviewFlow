@@ -33,7 +33,8 @@ model Preview {
   prNumber  Int
   status    String
   url       String?
+  buildLogs String?
+  containerName String?
 
   @@unique([projectId, prNumber])
 }
-
