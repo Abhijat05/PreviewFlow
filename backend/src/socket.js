@@ -40,7 +40,7 @@ export function initSocket(server) {
         }
 
         if (preview.project.userId !== payload.userId) {
-          socket.emit("error", "Not authorized for this preview");
+          socket.emit("error", "Not authorized for this preview"); 
           return socket.disconnect();
         }
 

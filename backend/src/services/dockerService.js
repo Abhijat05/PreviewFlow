@@ -1,4 +1,4 @@
-// backend/src/services/dockerService.js
+import fs from "fs";
 import path from "path";
 import { exec } from "child_process";
 import getPort from "get-port";
@@ -6,61 +6,63 @@ import { prisma } from "../db.js";
 import { getIO } from "../socket.js";
 
 /**
- * Execute command & stream logs
+ * Execute a shell command and stream logs
  */
-function runCommand(command, onData) {
+export function run(command, onData) {
   return new Promise((resolve, reject) => {
     const child = exec(command, { maxBuffer: 1024 * 1024 * 50 });
 
     child.stdout?.on("data", (d) => onData(d.toString()));
     child.stderr?.on("data", (d) => onData(d.toString()));
 
-    child.on("close", (code) => resolve(code));
+    child.on("close", resolve);
     child.on("error", reject);
   });
 }
 
-export async function buildAndRun({ project, previewId, repoPath, prNumber }) {
-  const sanitized = `${project.repoOwner}-${project.repoName}-pr-${prNumber}`
-    .toLowerCase()
-    .replace(/[^a-z0-9\-]/g, "-");
-
-  let containerName = sanitized;
-  let imageName = sanitized;
-
-  const dockerfilePath = path.resolve("deploy-templates/vite.Dockerfile");
-  const hostPort = await getPort({ port: 40000 });
-
+/**
+ * Build & run preview container
+ */
+export async function buildPreview({ project, previewId, repoPath, prNumber }) {
   let logs = "";
-
-  const append = (chunk) => {
+  const push = (chunk) => {
     logs += chunk;
     try {
       getIO().to(previewId).emit("log", { chunk });
     } catch {}
   };
 
+  // Mark preview as building
   await prisma.preview.update({
     where: { id: previewId },
     data: { status: "building" }
   });
 
-  const buildCmd = `docker build -t ${imageName} -f "${dockerfilePath}" "${repoPath}"`;
-  const runCmd = `docker run -d --name ${containerName} -p ${hostPort}:80 ${imageName}`;
+  const baseName = `${project.repoOwner}-${project.repoName}-pr-${prNumber}`
+    .toLowerCase()
+    .replace(/[^a-z0-9\-]/g, "-");
+
+  const imageName = baseName;
+  let containerName = baseName;
+
+  const dockerfile = path.resolve("deploy-templates/vite.Dockerfile");
+  const hostPort = await getPort({ port: 40000 });
 
   try {
-    append(`> ${buildCmd}\n`);
-    await runCommand(buildCmd, append);
+    // Build
+    push(`\n> docker build -t ${imageName} -f "${dockerfile}" "${repoPath}"\n`);
+    await run(`docker build -t ${imageName} -f "${dockerfile}" "${repoPath}"`, push);
 
-    append(`> ${runCmd}\n`);
-    await runCommand(runCmd, append);
+    // Run
+    push(`\n> docker run -d --name ${containerName} -p ${hostPort}:80 ${imageName}\n`);
+    await run(`docker run -d --name ${containerName} -p ${hostPort}:80 ${imageName}`, push);
 
-    // 🔥 Get actual container name in case Docker renamed it
+    // Detect actual container name
     await new Promise((resolve) => {
       exec(`docker ps -a --format "{{.Names}}"`, (err, stdout) => {
         if (!err) {
-          const names = stdout.split("\n").map((n) => n.trim());
-          const match = names.find((n) => n.includes(sanitized));
+          const names = stdout.split("\n").map((s) => s.trim());
+          const match = names.find((s) => s.includes(baseName));
           if (match) containerName = match;
         }
         resolve();
@@ -69,28 +71,30 @@ export async function buildAndRun({ project, previewId, repoPath, prNumber }) {
 
     const url = `http://localhost:${hostPort}`;
 
-    // Save everything
+    // Save result in DB
     await prisma.preview.update({
       where: { id: previewId },
       data: {
-        url,
         status: "live",
+        url,
         buildLogs: logs,
-        containerName: containerName
+        containerName
       }
     });
 
+    // Notify frontend
     try {
       getIO().to(previewId).emit("log-finish", { url });
     } catch {}
 
-    return { url, containerName, hostPort };
+    return url;
   } catch (err) {
+    // Save failed build
     await prisma.preview.update({
       where: { id: previewId },
       data: {
         status: "error",
-        buildLogs: logs + "\n\nBUILD ERROR:\n" + (err.message || String(err))
+        buildLogs: logs + "\n\nERROR:\n" + err.message
       }
     });
 
@@ -102,19 +106,13 @@ export async function buildAndRun({ project, previewId, repoPath, prNumber }) {
   }
 }
 
-export async function stopContainer(containerName) {
-  try {
-    await new Promise((resolve, reject) => {
-      exec(`docker rm -f ${containerName}`, (err, stdout) => {
-        if (err) {
-          console.log("❌ Failed to remove container:", containerName, err.message);
-          return reject(err);
-        }
-        console.log("✔ Removed container:", containerName);
-        resolve(stdout);
-      });
+/**
+ * Stop & remove container safely
+ */
+export async function removeContainer(name) {
+  return new Promise((resolve) => {
+    exec(`docker rm -f ${name}`, (err) => {
+      resolve(!err);
     });
-  } catch (err) {
-    console.log("Container remove error:", err.message);
-  }
+  });
 }
