@@ -1,21 +1,48 @@
-MIT License
+Copyright (c) 2025 Abhijat Sinha
 
-Copyright (c) 2025 Abhijat sinha
+Permission is hereby granted free of charge to any person obtaining a copy of this software and associated documentation files (the “Software”) to use, copy, modify, and distribute the Software for personal, non-commercial projects only, subject to the following conditions:
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+1. Personal Use Only (Default)
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+The Software may be used for personal, hobby, educational, research, or internal non-commercial purposes. Use by nonprofit organizations is allowed provided no revenue is generated directly or indirectly.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+2. Commercial Use Requires Permission
+
+Any use of the Software in a product, service, or system that:
+
+generates revenue,
+
+includes paid features,
+
+monetizes user activity (including ads, data monetization, or subscriptions), or
+
+is used internally by a for-profit business
+requires prior written permission from the copyright holder.
+
+Commercial users must enter into a mutually agreed revenue-sharing or paid licensing agreement. Permission is only granted when confirmed in writing by the copyright holder.
+
+3. Production Use Attribution
+
+Any production use—commercial or otherwise—must include clear and visible attribution:
+
+“This project includes software created by Abhijat Sinha.”
+
+Attribution must appear in the documentation, an About page, or a credits section.
+
+4. Redistribution Requirements
+
+Redistribution of the Software, whether modified or unmodified, must include:
+
+This license text, and
+
+The above copyright notice.
+
+Modified versions must clearly indicate that they have been altered.
+
+5. Termination
+
+Any failure to comply with this license automatically terminates all granted rights.
+
+6. Warranty Disclaimer
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
