@@ -15,7 +15,10 @@ export function run(command, onData) {
     child.stdout?.on("data", (d) => onData(d.toString()));
     child.stderr?.on("data", (d) => onData(d.toString()));
 
-    child.on("close", resolve);
+    child.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Command failed with exit code ${code}`));
+    });
     child.on("error", reject);
   });
 }
@@ -29,13 +32,17 @@ export async function buildPreview({ project, previewId, repoPath, prNumber }) {
     logs += chunk;
     try {
       getIO().to(previewId).emit("log", { chunk });
-    } catch {}
+    } catch { }
   };
 
-  // Mark preview as building
+  // → MARK BUILD START
+  const buildStartedAt = new Date();
   await prisma.preview.update({
     where: { id: previewId },
-    data: { status: "building" }
+    data: {
+      status: "building",
+      buildStartedAt
+    }
   });
 
   const baseName = `${project.repoOwner}-${project.repoName}-pr-${prNumber}`
@@ -51,11 +58,19 @@ export async function buildPreview({ project, previewId, repoPath, prNumber }) {
   try {
     // Build
     push(`\n> docker build -t ${imageName} -f "${dockerfile}" "${repoPath}"\n`);
-    await run(`docker build -t ${imageName} -f "${dockerfile}" "${repoPath}"`, push);
+    await run(
+      `docker build -t ${imageName} -f "${dockerfile}" "${repoPath}"`,
+      push
+    );
 
     // Run
-    push(`\n> docker run -d --name ${containerName} -p ${hostPort}:80 ${imageName}\n`);
-    await run(`docker run -d --name ${containerName} -p ${hostPort}:80 ${imageName}`, push);
+    push(
+      `\n> docker run -d --name ${containerName} -p ${hostPort}:80 ${imageName}\n`
+    );
+    await run(
+      `docker run -d --name ${containerName} -p ${hostPort}:80 ${imageName}`,
+      push
+    );
 
     // Detect actual container name
     await new Promise((resolve) => {
@@ -71,6 +86,9 @@ export async function buildPreview({ project, previewId, repoPath, prNumber }) {
 
     const url = `http://localhost:${hostPort}`;
 
+    // → MARK BUILD END
+    const buildCompletedAt = new Date();
+
     // Save result in DB
     await prisma.preview.update({
       where: { id: previewId },
@@ -78,29 +96,31 @@ export async function buildPreview({ project, previewId, repoPath, prNumber }) {
         status: "live",
         url,
         buildLogs: logs,
-        containerName
+        containerName,
+        buildCompletedAt
       }
     });
 
-    // Notify frontend
     try {
       getIO().to(previewId).emit("log-finish", { url });
-    } catch {}
+    } catch { }
 
     return url;
   } catch (err) {
-    // Save failed build
+    const buildCompletedAt = new Date();
+
     await prisma.preview.update({
       where: { id: previewId },
       data: {
         status: "error",
-        buildLogs: logs + "\n\nERROR:\n" + err.message
+        buildLogs: logs + "\n\nERROR:\n" + err.message,
+        buildCompletedAt
       }
     });
 
     try {
       getIO().to(previewId).emit("log-error", { message: err.message });
-    } catch {}
+    } catch { }
 
     throw err;
   }
