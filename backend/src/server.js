@@ -15,6 +15,7 @@ import createWebhook from "./routes/createWebhook.js";
 import githubWebhook from "./routes/githubWebhook.js";
 import devSim from "./routes/devSimulate.js";
 import projectDashboard from "./routes/projectDashboard.js";
+import previewActions from "./routes/previewActions.js";
 import logsRoute from "./routes/logs.js";
 
 import { initSocket } from "./socket.js";
@@ -61,6 +62,7 @@ app.use("/api", connectRepo);
 app.use("/api", createWebhook);
 app.use("/api", projectDashboard);
 app.use("/api", logsRoute);
+app.use("/api", previewActions);
 
 // webhook route (must accept raw body)
 app.use("/", githubWebhook);
