@@ -1,4 +1,3 @@
-// frontend/src/pages/Dashboard.jsx
 import React, { useEffect, useState } from "react";
 import axios from "axios";
 import io from "socket.io-client";
@@ -11,237 +10,215 @@ import {
   CardDescription,
   CardContent
 } from "@/components/ui/card";
+
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+
 import {
   ExternalLink,
   RefreshCw,
   Trash,
   GitPullRequest,
   Loader2,
-  MoreVertical
+  AlertTriangle
 } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem
-} from "@/components/ui/dropdown-menu";
 
-// CONNECT SOCKET
-const socket = io("http://localhost:4000", {
-  transports: ["websocket"]
-});
+// Socket.io connection
+const socket = io("http://localhost:4000", { transports: ["websocket"] });
+
+/**
+ * Utility: calculate build time
+ */
+function getBuildTime(pre) {
+  if (!pre.buildStartedAt || !pre.buildCompletedAt) return null;
+
+  const s = new Date(pre.buildStartedAt);
+  const e = new Date(pre.buildCompletedAt);
+  const sec = ((e - s) / 1000).toFixed(1);
+
+  return sec + "s";
+}
+
+/**
+ * Badge colors based on status
+ */
+function badgeColor(status) {
+  switch (status) {
+    case "live":
+      return "bg-green-600 text-white";
+    case "building":
+      return "bg-yellow-400 text-black";
+    case "error":
+      return "bg-red-600 text-white";
+    case "deleted":
+      return "bg-gray-400";
+    default:
+      return "bg-gray-300";
+  }
+}
 
 export default function Dashboard() {
   const [projects, setProjects] = useState([]);
   const [processingPreview, setProcessingPreview] = useState(null);
 
-  const navigate = useNavigate();
   const token = localStorage.getItem("token");
+  const navigate = useNavigate();
 
-  // -------------------------------------
-  // Load projects once (NO POLLING)
-  // -------------------------------------
-  const loadProjects = async () => {
-    try {
-      const res = await axios.get("http://localhost:4000/api/projects", {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setProjects(res.data);
-    } catch (err) {
-      console.error(err);
-      if (err.response?.status === 401) {
-        localStorage.removeItem("token");
-        navigate("/");
-      }
-    }
-  };
-
-  // -------------------------------------
-  // Setup real-time dashboard updates
-  // -------------------------------------
+  // --------------------------------------------
+  // Load projects once on mount
+  // --------------------------------------------
   useEffect(() => {
     if (!token) return navigate("/");
 
-    loadProjects();
+    axios
+      .get("http://localhost:4000/api/projects", {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      .then((res) => setProjects(res.data))
+      .catch(() => navigate("/"));
 
+    // real-time updates from backend
     socket.on("preview-status-update", (update) => {
-      console.log("Live update:", update);
-
-      setProjects((prev) =>
-        prev.map((project) => {
+      setProjects((old) =>
+        old.map((project) => {
           if (project.id !== update.projectId) return project;
 
-          // update preview inside project
-          const previews = project.previews.map((p) =>
-            p.prNumber === update.prNumber ? { ...p, ...update } : p
-          );
-
-          return { ...project, previews };
+          return {
+            ...project,
+            previews: project.previews.map((pre) =>
+              pre.prNumber === update.prNumber
+                ? { ...pre, ...update }
+                : pre
+            )
+          };
         })
       );
     });
 
-    return () => {
-      socket.off("preview-status-update");
-    };
+    return () => socket.off("preview-status-update");
   }, []);
 
-  // -------------------------------------
-  // Helpers
-  // -------------------------------------
-  const badgeColor = (status) => {
-    switch (status) {
-      case "live":
-        return "bg-green-500";
-      case "building":
-        return "bg-yellow-500 text-black";
-      case "error":
-        return "bg-red-500";
-      case "deleted":
-        return "bg-gray-500";
-      default:
-        return "bg-gray-400";
-    }
-  };
-
-  const openPreview = (pre) => {
-    if (pre.url) window.open(pre.url, "_blank");
-  };
-
-  const viewLogs = (pre) => {
-    navigate(`/logs/${pre.id}`);
-  };
-
-  const rebuildPreview = async (pre) => {
+  // --------------------------------------------
+  // Actions
+  // --------------------------------------------
+  const rebuild = async (pre) => {
     setProcessingPreview(pre.id);
-    try {
-      await axios.post(
-        `http://localhost:4000/api/preview/${pre.id}/rebuild`,
-        {},
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-    } catch (e) {
-      alert("Failed to rebuild");
-    }
+    await axios.post(
+      `http://localhost:4000/api/preview/${pre.id}/rebuild`,
+      {},
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
     setProcessingPreview(null);
   };
 
-  const deletePreview = async (pre) => {
+  const del = async (pre) => {
     if (!confirm("Delete this preview?")) return;
-    setProcessingPreview(pre.id);
 
-    try {
-      await axios.post(
-        `http://localhost:4000/api/preview/${pre.id}/delete`,
-        {},
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-    } catch (e) {
-      alert("Failed to delete");
-    }
+    setProcessingPreview(pre.id);
+    await axios.post(
+      `http://localhost:4000/api/preview/${pre.id}/delete`,
+      {},
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
     setProcessingPreview(null);
   };
 
-  // -------------------------------------
+  // --------------------------------------------
   // UI
-  // -------------------------------------
+  // --------------------------------------------
   return (
-    <div className="p-8 max-w-7xl mx-auto">
-      <header className="flex justify-between items-center mb-10">
-        <h1 className="text-4xl font-semibold tracking-tight">Dashboard</h1>
-        <div className="flex gap-2">
-          <Button variant="secondary" onClick={() => navigate("/connect")}>
-            + Connect Repo
-          </Button>
-          <Button
-            variant="destructive"
-            onClick={() => {
-              localStorage.removeItem("token");
-              navigate("/");
-            }}
-          >
-            Logout
-          </Button>
-        </div>
-      </header>
+    <div className="p-8 max-w-6xl mx-auto">
+      <h1 className="text-4xl font-semibold mb-8">Dashboard</h1>
 
-      <div className="grid grid-cols-1 gap-6">
-        {projects.map((project) => (
-          <Card key={project.id} className="shadow-md">
-            <CardHeader>
-              <CardTitle className="text-xl flex items-center gap-2">
-                <GitPullRequest className="w-5 h-5 text-blue-600" />
-                {project.repoOwner}/{project.repoName}
-              </CardTitle>
-              <CardDescription>
-                Connected repo previews
-              </CardDescription>
-            </CardHeader>
+      {projects.map((project) => (
+        <Card key={project.id} className="mb-6 shadow">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <GitPullRequest className="w-5 h-5 text-blue-600" />
+              {project.repoOwner}/{project.repoName}
+            </CardTitle>
+            <CardDescription>Pull Request Previews</CardDescription>
+          </CardHeader>
 
-            <CardContent>
-              {project.previews.length === 0 ? (
-                <p className="text-gray-500">No previews yet.</p>
-              ) : (
-                project.previews.map((pre) => (
-                  <div
-                    key={pre.id}
-                    className="flex justify-between border p-4 mb-3 rounded-lg items-center"
-                  >
-                    <div>
-                      <p className="font-medium">PR #{pre.prNumber}</p>
+          <CardContent>
+            {project.previews.length === 0 ? (
+              <p className="text-gray-500">No previews yet.</p>
+            ) : (
+              project.previews.map((pre) => (
+                <div
+                  key={pre.id}
+                  className="border rounded-lg p-4 mb-3 flex justify-between items-center"
+                >
+                  <div className="flex-col gap-1">
+                    <p className="font-medium text-lg">PR #{pre.prNumber}</p>
 
-                      <Badge className={badgeColor(pre.status)} variant="outline">
-                        {pre.status}
-                      </Badge>
+                    <Badge className={badgeColor(pre.status)}>
+                      {pre.status}
+                    </Badge>
 
-                      {pre.url && (
-                        <p
-                          className="text-blue-600 underline mt-1 cursor-pointer"
-                          onClick={() => openPreview(pre)}
-                        >
-                          {pre.url}
-                        </p>
-                      )}
-                    </div>
+                    {pre.status === "error" && (
+                      <div className="flex items-center gap-2 text-red-600 mt-1 text-sm">
+                        <AlertTriangle className="w-4 h-4" />
+                        <span>Build Failed</span>
+                      </div>
+                    )}
 
-                    <div className="flex gap-2">
-                      <Button size="sm" variant="secondary" onClick={() => viewLogs(pre)}>
-                        <ExternalLink className="w-4 h-4 mr-1" /> Logs
-                      </Button>
+                    {getBuildTime(pre) && (
+                      <p className="text-sm text-gray-500">
+                        Build time: <strong>{getBuildTime(pre)}</strong>
+                      </p>
+                    )}
 
-                      <Button
-                        size="sm"
-                        className="bg-yellow-500"
-                        onClick={() => rebuildPreview(pre)}
-                        disabled={processingPreview === pre.id}
+                    {pre.url && pre.status === "live" && (
+                      <p
+                        className="text-blue-600 underline text-sm cursor-pointer"
+                        onClick={() => window.open(pre.url, "_blank")}
                       >
-                        {processingPreview === pre.id ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <RefreshCw className="w-4 h-4" />
-                        )}
-                        Rebuild
-                      </Button>
-
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        onClick={() => deletePreview(pre)}
-                        disabled={processingPreview === pre.id}
-                      >
-                        <Trash className="w-4 h-4 mr-1" />
-                        Delete
-                      </Button>
-                    </div>
+                        {pre.url}
+                      </p>
+                    )}
                   </div>
-                ))
-              )}
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+
+                  <div className="flex gap-2">
+                    {/* Logs Button */}
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => navigate(`/logs/${pre.id}`)}
+                    >
+                      <ExternalLink className="w-4 h-4 mr-1" /> Logs
+                    </Button>
+
+                    {/* Rebuild Button */}
+                    <Button
+                      size="sm"
+                      onClick={() => rebuild(pre)}
+                      disabled={processingPreview === pre.id}
+                    >
+                      {processingPreview === pre.id ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <RefreshCw className="w-4 h-4" />
+                      )}
+                      Rebuild
+                    </Button>
+
+                    {/* Delete Button */}
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      disabled={processingPreview === pre.id}
+                      onClick={() => del(pre)}
+                    >
+                      <Trash className="w-4 h-4 mr-1" /> Delete
+                    </Button>
+                  </div>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+      ))}
     </div>
   );
 }
