@@ -111,7 +111,7 @@ export default function ConnectRepo() {
       <div className="relative z-10 w-full max-w-3xl mx-auto h-full flex flex-col p-6 md:p-12 animate-in fade-in slide-in-from-bottom-4 duration-500">
         
         <div className="shrink-0">
-            <button onClick={() => navigate('/')} className="group flex items-center gap-2 text-sm font-medium text-gray-500 hover:text-black transition-colors mb-8 pl-1 w-fit">
+            <button onClick={() => navigate('/dashboard')} className="group flex items-center gap-2 text-sm font-medium text-gray-500 hover:text-black transition-colors mb-8 pl-1 w-fit">
               <div className="p-1 bg-white border border-gray-200 rounded-lg group-hover:border-gray-300 shadow-sm transition-all"><ArrowLeft size={16} /></div>
               Back to Dashboard
             </button>
