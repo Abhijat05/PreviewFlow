@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import axios from "axios";
 import io from "socket.io-client";
 import { useNavigate } from "react-router-dom";
@@ -7,7 +7,8 @@ import PlanChangeModal from "../components/PlanChangeModal.jsx";
 
 import {
   GitPullRequest, RefreshCw, Trash2, ExternalLink, CheckCircle2, XCircle, Clock, Terminal, Loader2,
-  AlertCircle, ArrowRight, Globe, Ban, Archive, Layout, PlusCircle, Github, Zap, Lock, Crown, AlertTriangle, X, CheckCircle, Settings
+  AlertCircle, ArrowRight, Globe, Ban, Archive, Layout, PlusCircle, Github, Zap, Lock, Crown, AlertTriangle, X, CheckCircle, Settings,
+  Activity, MemoryStick // Added these for the Resource Monitor
 } from "lucide-react";
 
 // --- TIER CONFIGURATION ---
@@ -52,6 +53,11 @@ function getStatusVisuals(status) {
   } 
 }
 
+function formatBytesToMB(bytes) {
+  if (bytes === 0 || !bytes) return 0;
+  return (bytes / (1024 * 1024)).toFixed(0);
+}
+
 // --- COMPONENTS ---
 const LiveBuildTimer = ({ startTime }) => {
   const [elapsed, setElapsed] = useState(0);
@@ -93,6 +99,124 @@ const Toast = ({ message, type, onClose }) => {
   );
 };
 
+// --- NEW: Resource Monitor Component ---
+const ResourceMonitor = ({ stats }) => {
+  if (!stats) {
+    return (
+      <div className="mt-3 pt-3 border-t border-gray-100 animate-pulse flex flex-col gap-2">
+        <div className="h-1.5 bg-gray-100 rounded-full w-full"></div>
+        <div className="h-1.5 bg-gray-100 rounded-full w-3/4"></div>
+      </div>
+    );
+  }
+
+  const { cpu, memory } = stats;
+  const memoryMB = formatBytesToMB(memory);
+  
+  const isCpuHigh = cpu > 70;
+  const isMemoryHigh = memoryMB > 400; // Adjust max threshold as needed
+
+  return (
+    <div className="mt-3 pt-3 border-t border-gray-100 space-y-2.5">
+      <div className="flex flex-col gap-1">
+        <div className="flex justify-between items-center text-[10px] text-gray-500 font-mono uppercase">
+          <span className="flex items-center gap-1"><Activity className="w-3 h-3" /> CPU</span>
+          <span className={isCpuHigh ? "text-red-500 font-bold" : ""}>{cpu.toFixed(1)}%</span>
+        </div>
+        <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
+          <div 
+            className={`h-full transition-all duration-500 ease-out ${isCpuHigh ? "bg-red-500" : "bg-gray-800"}`}
+            style={{ width: `${Math.min(cpu, 100)}%` }}
+          />
+        </div>
+      </div>
+      <div className="flex flex-col gap-1">
+        <div className="flex justify-between items-center text-[10px] text-gray-500 font-mono uppercase">
+          <span className="flex items-center gap-1"><MemoryStick className="w-3 h-3" /> RAM</span>
+          <span className={isMemoryHigh ? "text-amber-500 font-bold" : ""}>{memoryMB} MB</span>
+        </div>
+        <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
+          <div 
+            className={`h-full transition-all duration-500 ease-out ${isMemoryHigh ? "bg-amber-500" : "bg-gray-800"}`}
+            style={{ width: `${Math.min((memoryMB / 512) * 100, 100)}%` }} 
+          />
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// --- NEW: Memoized Preview Card ---
+// This prevents all cards from re-rendering when one card gets a stats socket update
+const PreviewCard = React.memo(({ pre, stats, isProcessing, onRebuild, onDeleteConfirm, onViewLogs }) => {
+  const statusStyle = getStatusVisuals(pre.status);
+  const isDeleted = pre.status === "deleted";
+  const isBuilding = pre.status === "building";
+  const showTime = !isDeleted && pre.status !== 'queued';
+
+  let timeDisplay = null;
+  if (isBuilding) {
+    timeDisplay = <span className="text-amber-600 animate-pulse"><LiveBuildTimer startTime={pre.buildStartedAt} /></span>;
+  } else if (pre.buildCompletedAt && pre.buildStartedAt) {
+    const diff = (new Date(pre.buildCompletedAt) - new Date(pre.buildStartedAt)) / 1000;
+    timeDisplay = formatDuration(diff);
+  } else {
+    timeDisplay = "Pending...";
+  }
+
+  return (
+    // Changed h-[280px] to min-h-[280px] h-auto so the new monitor fits without squishing
+    <div className={`group relative border rounded-2xl shadow-sm transition-all duration-300 ease-out flex flex-col overflow-hidden min-h-[280px] h-auto ${statusStyle.border} ${statusStyle.ring} ${!isDeleted && !isBuilding ? 'hover:shadow-xl hover:-translate-y-1' : ''}`}>
+      {isBuilding && (
+        <div className="absolute bottom-0 left-0 w-full h-1 bg-amber-100 overflow-hidden z-20">
+          <div className="h-full bg-amber-400 animate-progress-indeterminate origin-left"></div>
+        </div>
+      )}
+
+      <div className="p-6 flex-1 flex flex-col">
+        <div className="flex justify-between items-start mb-4">
+          <div className="flex flex-col gap-1">
+            <span className="font-mono text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1"><GitPullRequest size={10} /> Pull Request</span>
+            <span className={`text-3xl font-mono font-bold tracking-tighter ${isDeleted ? 'text-gray-500' : 'text-gray-900'}`}>#{pre.prNumber}</span>
+          </div>
+          <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full border text-[11px] font-bold uppercase tracking-wide transition-all ${statusStyle.badge}`}>{statusStyle.icon}<span>{statusStyle.label}</span></div>
+        </div>
+        
+        <div className="space-y-3 flex-1">
+            <div className={`flex items-center gap-2 text-xs text-gray-500 font-medium bg-gray-50 w-fit px-2 py-1 rounded-md border border-gray-100 transition-opacity duration-300 ${showTime ? 'opacity-100' : 'opacity-0 select-none'}`}>
+                <Clock size={12} />
+                {timeDisplay}
+            </div>
+            
+            <div className="mt-2 flex items-center w-full">
+            {pre.status === "live" && pre.url ? (
+              <a href={pre.url} target="_blank" rel="noopener noreferrer" className="group/link flex items-center justify-between w-full bg-gray-50 hover:bg-white border border-gray-200 hover:border-blue-300 p-2 rounded-lg transition-all duration-200">
+                <div className="flex items-center gap-2 overflow-hidden"><div className="bg-white p-1 rounded-md border border-gray-200 text-gray-500 shrink-0"><Globe size={12} /></div><span className="text-xs font-mono text-gray-600 group-hover/link:text-blue-600 truncate">{pre.url.replace(/^https?:\/\//, '')}</span></div><ArrowRight size={12} className="text-gray-300 group-hover/link:text-blue-500 -translate-x-2 opacity-0 group-hover/link:opacity-100 group-hover/link:translate-x-0 transition-all" />
+              </a>
+            ) : (
+                <div className="w-full h-10 flex items-center px-1 text-xs text-gray-400 font-mono">{isBuilding ? <span className="flex items-center gap-2 text-amber-600">Building environment...</span> : isDeleted ? <span className="text-gray-500 flex items-center gap-2"><Ban size={12}/> Deployment inactive</span> : 'Waiting for deployment...'}</div>
+            )}
+          </div>
+
+          {/* Inject Resource Monitor Here */}
+          {pre.status === "live" && (
+            <ResourceMonitor stats={stats} />
+          )}
+
+        </div>
+      </div>
+      
+      <div className="px-6 py-4 border-t border-gray-200/50 bg-gray-50/50 flex items-center justify-between backdrop-blur-[2px] mt-auto">
+          <button onClick={() => onViewLogs(pre.id)} className="text-xs font-semibold text-gray-700 bg-white border border-gray-200 hover:border-gray-300 hover:shadow-sm px-4 py-2 rounded-full flex items-center gap-2 transition-all active:scale-95 group/btn"><Terminal size={13} className="text-gray-400 group-hover/btn:text-black transition-colors" /> View Logs</button>
+          <div className="flex items-center gap-1">
+            <button onClick={() => onRebuild(pre)} disabled={isProcessing} className={`p-2 rounded-full transition-all active:scale-90 ${isBuilding ? 'text-gray-300 cursor-not-allowed' : 'text-gray-400 hover:text-blue-600 hover:bg-blue-50'}`} title="Redeploy"><RefreshCw size={16} className={isProcessing ? "animate-spin" : ""} /></button>
+            <button onClick={() => onDeleteConfirm(pre)} disabled={isProcessing || isDeleted} className={`p-2 rounded-full transition-all active:scale-90 ${isDeleted ? 'text-gray-200 cursor-not-allowed' : 'text-gray-400 hover:text-red-600 hover:bg-red-50'}`} title="Delete"><Trash2 size={16} /></button>
+          </div>
+      </div>
+    </div>
+  );
+});
+
 export default function Dashboard() {
   const [projects, setProjects] = useState([]);
   const [processingPreview, setProcessingPreview] = useState(null);
@@ -101,11 +225,13 @@ export default function Dashboard() {
   const [currentTier, setCurrentTier] = useState("FREE");
   const [toast, setToast] = useState(null);
   const [isPlanModalOpen, setIsPlanModalOpen] = useState(false);
+  
+  // NEW: State to store live container resources
+  const [stats, setStats] = useState({});
 
   const token = localStorage.getItem("token");
   const navigate = useNavigate();
 
-  // Function to refresh data after plan change
   const refreshData = async () => {
     if (!token) return;
     try {
@@ -119,11 +245,10 @@ export default function Dashboard() {
       console.error("Failed to refresh data", err);
     }
   };
-
+  
   useEffect(() => {
     if (!token) return;
     
-    // 1. Initial State
     setCurrentTier(getUserTier(token));
     refreshData();
 
@@ -137,9 +262,23 @@ export default function Dashboard() {
       );
     };
 
+    // NEW: Handle the 4-second stat ticks
+    const handleStatsUpdate = (payload) => {
+      setStats((prev) => ({
+        ...prev,
+        [payload.previewId]: {
+          cpu: payload.cpu,
+          memory: payload.memory,
+        },
+      }));
+    };
+
     socket.on("preview-status-update", handleStatusUpdate);
+    socket.on("preview-stats-update", handleStatsUpdate);
+    
     return () => {
       socket.off("preview-status-update", handleStatusUpdate);
+      socket.off("preview-stats-update", handleStatsUpdate);
       controller.abort();
     };
   }, [token]);
@@ -150,7 +289,8 @@ export default function Dashboard() {
   
   const tierConfig = TIER_CONFIG[currentTier] || TIER_CONFIG.FREE;
 
-  const rebuild = async (pre) => {
+  // Wrapped in useCallback so React.memo doesn't fail on the cards
+  const handleRebuild = useCallback(async (pre) => {
     if (activeBuildsCount >= tierConfig.concurrentBuilds) {
       setToast({ 
         type: 'warning', 
@@ -162,7 +302,17 @@ export default function Dashboard() {
     setProcessingPreview(pre.id);
     try { await axios.post(`http://localhost:4000/api/preview/${pre.id}/rebuild`, {}, { headers: { Authorization: `Bearer ${token}` } }); } catch(e) { console.error(e); }
     setProcessingPreview(null);
-  };
+  }, [activeBuildsCount, tierConfig, token]);
+
+  // Wrapped in useCallback
+  const handleDeleteConfirm = useCallback((pre) => {
+    setDeleteConfirm(pre);
+  }, []);
+
+  // Wrapped in useCallback
+  const handleViewLogs = useCallback((id) => {
+    setActiveLogId(id);
+  }, []);
 
   const confirmDelete = async () => {
     if (!deleteConfirm) return;
@@ -202,7 +352,6 @@ export default function Dashboard() {
                     {tierConfig.label}
                   </span>
                   
-                  {/* Change Plan Button */}
                   <button 
                     onClick={() => setIsPlanModalOpen(true)}
                     className="ml-2 px-2 py-0.5 text-[10px] font-medium bg-white border border-gray-200 rounded hover:bg-gray-50 hover:text-black text-gray-500 transition-colors flex items-center gap-1"
@@ -231,68 +380,18 @@ export default function Dashboard() {
                  <div className="p-12 border border-dashed border-gray-300 rounded-2xl bg-white/60 backdrop-blur-sm text-center"><p className="text-gray-500 text-sm">Waiting for Pull Requests...</p></div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {project.previews.map((pre) => {
-                    const statusStyle = getStatusVisuals(pre.status);
-                    const isProcessing = processingPreview === pre.id;
-                    const isDeleted = pre.status === "deleted";
-                    const isBuilding = pre.status === "building";
-                    const showTime = !isDeleted && pre.status !== 'queued';
-
-                    let timeDisplay = null;
-                    if (isBuilding) {
-                      timeDisplay = <span className="text-amber-600 animate-pulse"><LiveBuildTimer startTime={pre.buildStartedAt} /></span>;
-                    } else if (pre.buildCompletedAt && pre.buildStartedAt) {
-                      const diff = (new Date(pre.buildCompletedAt) - new Date(pre.buildStartedAt)) / 1000;
-                      timeDisplay = formatDuration(diff);
-                    } else {
-                      timeDisplay = "Pending...";
-                    }
-
-                    return (
-                      <div key={pre.id} className={`group relative border rounded-2xl shadow-sm transition-all duration-300 ease-out flex flex-col overflow-hidden h-[280px] ${statusStyle.border} ${statusStyle.ring} ${!isDeleted && !isBuilding ? 'hover:shadow-xl hover:-translate-y-1' : ''}`}>
-                        {isBuilding && (
-                          <div className="absolute bottom-0 left-0 w-full h-1 bg-amber-100 overflow-hidden z-20">
-                            <div className="h-full bg-amber-400 animate-progress-indeterminate origin-left"></div>
-                          </div>
-                        )}
-
-                        <div className="p-6 flex-1 flex flex-col">
-                          <div className="flex justify-between items-start mb-6">
-                            <div className="flex flex-col gap-1">
-                              <span className="font-mono text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1"><GitPullRequest size={10} /> Pull Request</span>
-                              <span className={`text-3xl font-mono font-bold tracking-tighter ${isDeleted ? 'text-gray-500' : 'text-gray-900'}`}>#{pre.prNumber}</span>
-                            </div>
-                            <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full border text-[11px] font-bold uppercase tracking-wide transition-all ${statusStyle.badge}`}>{statusStyle.icon}<span>{statusStyle.label}</span></div>
-                          </div>
-                          
-                          <div className="space-y-4 flex-1">
-                             <div className={`flex items-center gap-2 text-xs text-gray-500 font-medium bg-gray-50 w-fit px-2 py-1 rounded-md border border-gray-100 transition-opacity duration-300 ${showTime ? 'opacity-100' : 'opacity-0 select-none'}`}>
-                                  <Clock size={12} />
-                                  {timeDisplay}
-                             </div>
-                             
-                             <div className="mt-2 h-10 flex items-center w-full">
-                              {pre.status === "live" && pre.url ? (
-                                <a href={pre.url} target="_blank" rel="noopener noreferrer" className="group/link flex items-center justify-between w-full bg-gray-50 hover:bg-white border border-gray-200 hover:border-blue-300 p-2 rounded-lg transition-all duration-200">
-                                  <div className="flex items-center gap-2 overflow-hidden"><div className="bg-white p-1 rounded-md border border-gray-200 text-gray-500 shrink-0"><Globe size={12} /></div><span className="text-xs font-mono text-gray-600 group-hover/link:text-blue-600 truncate">{pre.url.replace(/^https?:\/\//, '')}</span></div><ArrowRight size={12} className="text-gray-300 group-hover/link:text-blue-500 -translate-x-2 opacity-0 group-hover/link:opacity-100 group-hover/link:translate-x-0 transition-all" />
-                                </a>
-                              ) : (
-                                 <div className="w-full h-full flex items-center px-1 text-xs text-gray-400 font-mono">{isBuilding ? <span className="flex items-center gap-2 text-amber-600">Building environment...</span> : isDeleted ? <span className="text-gray-500 flex items-center gap-2"><Ban size={12}/> Deployment inactive</span> : 'Waiting for deployment...'}</div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                        
-                        <div className="px-6 py-4 border-t border-gray-200/50 bg-gray-50/50 flex items-center justify-between backdrop-blur-[2px] mt-auto">
-                           <button onClick={() => setActiveLogId(pre.id)} className="text-xs font-semibold text-gray-700 bg-white border border-gray-200 hover:border-gray-300 hover:shadow-sm px-4 py-2 rounded-full flex items-center gap-2 transition-all active:scale-95 group/btn"><Terminal size={13} className="text-gray-400 group-hover/btn:text-black transition-colors" /> View Logs</button>
-                           <div className="flex items-center gap-1">
-                              <button onClick={() => rebuild(pre)} disabled={isProcessing} className={`p-2 rounded-full transition-all active:scale-90 ${isBuilding ? 'text-gray-300 cursor-not-allowed' : 'text-gray-400 hover:text-blue-600 hover:bg-blue-50'}`} title="Redeploy"><RefreshCw size={16} className={isProcessing ? "animate-spin" : ""} /></button>
-                              <button onClick={() => setDeleteConfirm(pre)} disabled={isProcessing || isDeleted} className={`p-2 rounded-full transition-all active:scale-90 ${isDeleted ? 'text-gray-200 cursor-not-allowed' : 'text-gray-400 hover:text-red-600 hover:bg-red-50'}`} title="Delete"><Trash2 size={16} /></button>
-                           </div>
-                        </div>
-                      </div>
-                    );
-                  })}
+                  {project.previews.map((pre) => (
+                    // We render our extracted Memo component here to save performance
+                    <PreviewCard
+                      key={pre.id}
+                      pre={pre}
+                      stats={stats[pre.id]}
+                      isProcessing={processingPreview === pre.id}
+                      onRebuild={handleRebuild}
+                      onDeleteConfirm={handleDeleteConfirm}
+                      onViewLogs={handleViewLogs}
+                    />
+                  ))}
                 </div>
               )}
             </div>
