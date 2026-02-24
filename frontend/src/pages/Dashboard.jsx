@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useCallback } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import axios from "axios";
 import io from "socket.io-client";
 import { useNavigate } from "react-router-dom";
@@ -6,9 +6,9 @@ import Logs from "./Logs.jsx";
 import PlanChangeModal from "../components/PlanChangeModal.jsx"; 
 
 import {
-  GitPullRequest, RefreshCw, Trash2, ExternalLink, CheckCircle2, XCircle, Clock, Terminal, Loader2,
-  AlertCircle, ArrowRight, Globe, Ban, Archive, Layout, PlusCircle, Github, Zap, Lock, Crown, AlertTriangle, X, CheckCircle, Settings,
-  Activity, MemoryStick // Added these for the Resource Monitor
+  GitPullRequest, RefreshCw, Trash2, CheckCircle2, XCircle, Clock, Terminal, Loader2,
+  AlertCircle, ArrowRight, Globe, Ban, Archive, Layout, PlusCircle, Lock, Crown, AlertTriangle, X, CheckCircle, Settings,
+  Activity, MemoryStick
 } from "lucide-react";
 
 // --- TIER CONFIGURATION ---
@@ -53,7 +53,7 @@ function getStatusVisuals(status) {
   } 
 }
 
-function formatBytesToMB(bytes) {
+export function formatBytesToMB(bytes) {
   if (bytes === 0 || !bytes) return 0;
   return (bytes / (1024 * 1024)).toFixed(0);
 }
@@ -99,13 +99,21 @@ const Toast = ({ message, type, onClose }) => {
   );
 };
 
-// --- NEW: Resource Monitor Component ---
-const ResourceMonitor = ({ stats }) => {
+// Resource Monitor Component (Clickable to full page)
+// Ultra-crisp Vercel-style Resource Monitor for Dashboard Cards
+const ResourceMonitor = ({ stats, onClick }) => {
+  // Sleeker skeleton state
   if (!stats) {
     return (
-      <div className="mt-3 pt-3 border-t border-gray-100 animate-pulse flex flex-col gap-2">
-        <div className="h-1.5 bg-gray-100 rounded-full w-full"></div>
-        <div className="h-1.5 bg-gray-100 rounded-full w-3/4"></div>
+      <div className="mt-4 pt-4 border-t border-gray-100 flex flex-col gap-3 opacity-60">
+        <div className="flex justify-between items-center">
+          <div className="h-3 w-8 bg-gray-200 rounded animate-pulse"></div>
+          <div className="h-3 w-12 bg-gray-100 rounded animate-pulse"></div>
+        </div>
+        <div className="flex justify-between items-center">
+          <div className="h-3 w-8 bg-gray-200 rounded animate-pulse"></div>
+          <div className="h-3 w-16 bg-gray-100 rounded animate-pulse"></div>
+        </div>
       </div>
     );
   }
@@ -114,30 +122,45 @@ const ResourceMonitor = ({ stats }) => {
   const memoryMB = formatBytesToMB(memory);
   
   const isCpuHigh = cpu > 70;
-  const isMemoryHigh = memoryMB > 400; // Adjust max threshold as needed
+  const isMemoryHigh = memoryMB > 400;
 
   return (
-    <div className="mt-3 pt-3 border-t border-gray-100 space-y-2.5">
-      <div className="flex flex-col gap-1">
-        <div className="flex justify-between items-center text-[10px] text-gray-500 font-mono uppercase">
-          <span className="flex items-center gap-1"><Activity className="w-3 h-3" /> CPU</span>
-          <span className={isCpuHigh ? "text-red-500 font-bold" : ""}>{cpu.toFixed(1)}%</span>
+    <div 
+      onClick={onClick}
+      className="mt-4 pt-4 border-t border-gray-100 space-y-3 cursor-pointer hover:bg-gray-50/80 p-3 -mx-3 rounded-xl transition-all group/monitor"
+      title="View Telemetry"
+    >
+      {/* CPU Row */}
+      <div className="flex flex-col gap-1.5">
+        <div className="flex justify-between items-baseline text-[11px] font-mono tracking-tight">
+          <span className="text-gray-500 flex items-center gap-1.5 uppercase">
+            <Activity className="w-3 h-3 text-gray-400 group-hover/monitor:text-black transition-colors" /> CPU
+          </span>
+          <span className={isCpuHigh ? "text-red-500 font-bold" : "text-gray-900 font-semibold"}>
+            {cpu.toFixed(1)}%
+          </span>
         </div>
-        <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
+        <div className="h-1 w-full bg-gray-100 rounded-full overflow-hidden">
           <div 
-            className={`h-full transition-all duration-500 ease-out ${isCpuHigh ? "bg-red-500" : "bg-gray-800"}`}
+            className={`h-full transition-all duration-500 ease-out ${isCpuHigh ? "bg-red-500" : "bg-black"}`}
             style={{ width: `${Math.min(cpu, 100)}%` }}
           />
         </div>
       </div>
-      <div className="flex flex-col gap-1">
-        <div className="flex justify-between items-center text-[10px] text-gray-500 font-mono uppercase">
-          <span className="flex items-center gap-1"><MemoryStick className="w-3 h-3" /> RAM</span>
-          <span className={isMemoryHigh ? "text-amber-500 font-bold" : ""}>{memoryMB} MB</span>
+
+      {/* RAM Row */}
+      <div className="flex flex-col gap-1.5">
+        <div className="flex justify-between items-baseline text-[11px] font-mono tracking-tight">
+          <span className="text-gray-500 flex items-center gap-1.5 uppercase">
+            <MemoryStick className="w-3 h-3 text-gray-400 group-hover/monitor:text-[#0070F3] transition-colors" /> RAM
+          </span>
+          <span className={isMemoryHigh ? "text-amber-500 font-bold" : "text-gray-900 font-semibold"}>
+            {memoryMB} MB
+          </span>
         </div>
-        <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
+        <div className="h-1 w-full bg-gray-100 rounded-full overflow-hidden">
           <div 
-            className={`h-full transition-all duration-500 ease-out ${isMemoryHigh ? "bg-amber-500" : "bg-gray-800"}`}
+            className={`h-full transition-all duration-500 ease-out ${isMemoryHigh ? "bg-amber-500" : "bg-[#0070F3]"}`}
             style={{ width: `${Math.min((memoryMB / 512) * 100, 100)}%` }} 
           />
         </div>
@@ -146,9 +169,8 @@ const ResourceMonitor = ({ stats }) => {
   );
 };
 
-// --- NEW: Memoized Preview Card ---
-// This prevents all cards from re-rendering when one card gets a stats socket update
-const PreviewCard = React.memo(({ pre, stats, isProcessing, onRebuild, onDeleteConfirm, onViewLogs }) => {
+// Memoized Preview Card
+const PreviewCard = React.memo(({ pre, stats, isProcessing, onRebuild, onDeleteConfirm, onViewLogs, onOpenStats }) => {
   const statusStyle = getStatusVisuals(pre.status);
   const isDeleted = pre.status === "deleted";
   const isBuilding = pre.status === "building";
@@ -165,7 +187,6 @@ const PreviewCard = React.memo(({ pre, stats, isProcessing, onRebuild, onDeleteC
   }
 
   return (
-    // Changed h-[280px] to min-h-[280px] h-auto so the new monitor fits without squishing
     <div className={`group relative border rounded-2xl shadow-sm transition-all duration-300 ease-out flex flex-col overflow-hidden min-h-[280px] h-auto ${statusStyle.border} ${statusStyle.ring} ${!isDeleted && !isBuilding ? 'hover:shadow-xl hover:-translate-y-1' : ''}`}>
       {isBuilding && (
         <div className="absolute bottom-0 left-0 w-full h-1 bg-amber-100 overflow-hidden z-20">
@@ -198,9 +219,9 @@ const PreviewCard = React.memo(({ pre, stats, isProcessing, onRebuild, onDeleteC
             )}
           </div>
 
-          {/* Inject Resource Monitor Here */}
+          {/* Inject Resource Monitor Here with onClick prop */}
           {pre.status === "live" && (
-            <ResourceMonitor stats={stats} />
+            <ResourceMonitor stats={stats} onClick={() => onOpenStats(pre)} />
           )}
 
         </div>
@@ -226,7 +247,7 @@ export default function Dashboard() {
   const [toast, setToast] = useState(null);
   const [isPlanModalOpen, setIsPlanModalOpen] = useState(false);
   
-  // NEW: State to store live container resources
+  // LIVE STATS STATE
   const [stats, setStats] = useState({});
 
   const token = localStorage.getItem("token");
@@ -245,7 +266,7 @@ export default function Dashboard() {
       console.error("Failed to refresh data", err);
     }
   };
-  
+
   useEffect(() => {
     if (!token) return;
     
@@ -262,7 +283,7 @@ export default function Dashboard() {
       );
     };
 
-    // NEW: Handle the 4-second stat ticks
+    // Simplified stats listener: No longer keeping history here.
     const handleStatsUpdate = (payload) => {
       setStats((prev) => ({
         ...prev,
@@ -289,7 +310,7 @@ export default function Dashboard() {
   
   const tierConfig = TIER_CONFIG[currentTier] || TIER_CONFIG.FREE;
 
-  // Wrapped in useCallback so React.memo doesn't fail on the cards
+  // Stable References (useCallback) to prevent unneeded re-renders on the child cards
   const handleRebuild = useCallback(async (pre) => {
     if (activeBuildsCount >= tierConfig.concurrentBuilds) {
       setToast({ 
@@ -304,15 +325,19 @@ export default function Dashboard() {
     setProcessingPreview(null);
   }, [activeBuildsCount, tierConfig, token]);
 
-  // Wrapped in useCallback
   const handleDeleteConfirm = useCallback((pre) => {
     setDeleteConfirm(pre);
   }, []);
 
-  // Wrapped in useCallback
   const handleViewLogs = useCallback((id) => {
     setActiveLogId(id);
   }, []);
+
+  // NEW NAVIGATE HANDLER
+  const handleOpenStats = useCallback((pre) => {
+    // Navigate to the full page, passing the preview data in state
+    navigate(`/metrics/${pre.id}`, { state: { preview: pre } });
+  }, [navigate]);
 
   const confirmDelete = async () => {
     if (!deleteConfirm) return;
@@ -381,7 +406,6 @@ export default function Dashboard() {
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {project.previews.map((pre) => (
-                    // We render our extracted Memo component here to save performance
                     <PreviewCard
                       key={pre.id}
                       pre={pre}
@@ -390,6 +414,7 @@ export default function Dashboard() {
                       onRebuild={handleRebuild}
                       onDeleteConfirm={handleDeleteConfirm}
                       onViewLogs={handleViewLogs}
+                      onOpenStats={handleOpenStats} // Triggers navigation to PreviewMetrics
                     />
                   ))}
                 </div>
