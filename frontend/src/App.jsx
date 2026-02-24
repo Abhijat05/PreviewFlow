@@ -7,6 +7,7 @@ import Dashboard from "./pages/Dashboard.jsx";
 import Logs from "./pages/Logs.jsx";
 import LandingPage from "./pages/LandingPage.jsx";
 import Pricing from "./pages/Pricing.jsx";
+import PreviewMetrics from "./pages/PreviewMetrics.jsx";
 
 import { AuthProvider, useAuth } from "./context/AuthContext.jsx";
 
@@ -71,6 +72,8 @@ function AppRoutes() {
         path="*"
         element={token ? <Navigate to="/dashboard" replace /> : <Navigate to="/" replace />}
       />
+
+      <Route path="/metrics/:id" element={<PreviewMetrics />} />
     </Routes>
   );
 }
