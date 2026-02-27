@@ -36,18 +36,36 @@ model Project {
 }
 
 model Preview {
-  id               String   @id @default(cuid())
+  id               String          @id @default(cuid())
   projectId        String
-  project          Project  @relation("ProjectPreviews", fields: [projectId], references: [id])
+  project          Project         @relation("ProjectPreviews", fields: [projectId], references: [id])
   prNumber         Int
   status           String
   url              String?
   buildLogs        String?
   containerName    String?
   port             Int?
-  buildNumber      Int      @default(1)
+  buildNumber      Int             @default(1)
   buildStartedAt   DateTime?
   buildCompletedAt DateTime?
+  metrics          PreviewMetric[]
 
   @@unique([projectId, prNumber])
+}
+
+model PreviewMetric {
+  id String @id @default(cuid())
+
+  previewId String
+  preview   Preview @relation(fields: [previewId], references: [id])
+
+  cpu    Float
+  memory BigInt
+
+  networkRx BigInt?
+  networkTx BigInt?
+
+  createdAt DateTime @default(now())
+
+  @@index([previewId, createdAt])
 }
