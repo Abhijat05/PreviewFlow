@@ -3,9 +3,14 @@ import { prisma } from "../db.js";
 import { getIO } from "../socket.js";
 
 const POLL_INTERVAL = 4000;
+const STORE_INTERVAL = 30000;
+
+
+const lastStoredAt = {};
 
 export function startStatsWorker() {
-    console.log("------Stats worker started------");
+  console.log("------Stats worker started------");
+
   setInterval(async () => {
     try {
       const previews = await prisma.preview.findMany({
@@ -20,14 +25,11 @@ export function startStatsWorker() {
           prNumber: true
         }
       });
-    //   console.log("ALL previews:", previews);
 
       for (const p of previews) {
         try {
           const container = docker.getContainer(p.containerName);
           const stats = await container.stats({ stream: false });
-        //   console.log("worker previews:", previews.length);
-        //   console.log("checking preview:", p.containerName);
 
           const cpuDelta =
             stats.cpu_stats.cpu_usage.total_usage -
@@ -44,9 +46,7 @@ export function startStatsWorker() {
                 100
               : 0;
 
-          const memory = stats.memory_stats.usage;
-        
-
+          const memory = stats.memory_stats.usage || 0;
           const io = getIO();
           io.emit("preview-stats-update", {
             previewId: p.id,
@@ -55,16 +55,33 @@ export function startStatsWorker() {
             cpu: Number(cpu.toFixed(2)),
             memory
           });
-          
+
+          const now = Date.now();
+          const last = lastStoredAt[p.id] || 0;
+
+          if (now - last > STORE_INTERVAL) {
+            try {
+              await prisma.previewMetric.create({
+                data: {
+                  previewId: p.id,
+                  cpu: Number(cpu.toFixed(2)),
+                  memory: BigInt(memory)
+                }
+              });
+
+              lastStoredAt[p.id] = now;
+            } catch (e) {
+              console.error("metric store failed", e.message);
+            }
+          }
 
         } catch (err) {
           console.log("stats error for", p.containerName, err.message);
         }
       }
-      
+
     } catch (err) {
       console.error("stats worker error", err);
     }
   }, POLL_INTERVAL);
-  
 }
