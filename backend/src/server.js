@@ -19,6 +19,7 @@ import logsRoute from "./routes/logs.js";
 import userRoute from "./routes/user.js";
 import accountTier from "./routes/accountTier.js";
 import { startStatsWorker } from "./services/statsWorker.js";
+import previewMetricsRoutes from "./routes/previewMetrics.js";
 import devSim from "./routes/devSimulate.js"; // Development simulation routes
 
 dotenv.config();
@@ -92,6 +93,7 @@ app.use("/api", previewActions);
 app.use("/api", projectDashboard);
 app.use("/api", logsRoute);
 app.use("/api/user", userRoute);
+app.use("/api/previews", previewMetricsRoutes);
 app.use("/api/account", accountTier);
 
 app.use("/", githubWebhook);
