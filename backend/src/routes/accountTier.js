@@ -1,5 +1,6 @@
 // backend/src/routes/accountTier.js
 import express from "express";
+import jwt from "jsonwebtoken";
 import { prisma } from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { getTierLimits, compareTier, normalizeTier } from "../middleware/tierLimits.js";
@@ -10,51 +11,28 @@ const router = express.Router();
 const VALID_TIERS = ["FREE", "HOBBY", "PRO", "ENTERPRISE"];
 
 /**
- * POST /api/account/change-tier
- *
- * Body:
- *  {
- *    newTier: "FREE" | "HOBBY" | "PRO" | "ENTERPRISE",
- *    confirmCleanup?: boolean   // if false/omitted => dry-run (no deletion)
- *  }
- *
- * Response (dry-run when cleanup needed):
- *  {
- *    needsCleanup: true,
- *    currentTier,
- *    newTier,
- *    totalProjects,
- *    totalPreviews,
- *    willDeleteProjects: [{ id, repoOwner, repoName }],
- *    willDeletePreviews: [{ id, projectId, prNumber, status }]
- *  }
- *
- * Response (after confirmed cleanup & update):
- *  {
- *    needsCleanup: false,
- *    changed: true,
- *    currentTier,
- *    newTier,
- *    totalProjects,
- *    totalPreviews,
- *    deletedProjectsCount,
- *    deletedPreviewsCount
- *  }
+ * Core handler for changing account tier.
+ * Exported for testability.
  */
-router.post("/change-tier", requireAuth, async (req, res) => {
+export async function handleChangeTier(req, res) {
   try {
-    const { newTier, confirmCleanup } = req.body || {};
-    const user = req.auth.user;
+    const { newTier, confirmCleanup, paymentToken } = req.body || {};
+    const user = req.auth?.user;
 
-    if (!newTier) {
+    if (!user || !user.id) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    if (!newTier || typeof newTier !== "string") {
       return res.status(400).json({ error: "newTier is required" });
     }
 
-    const targetTier = normalizeTier(newTier);
-    if (!VALID_TIERS.includes(targetTier)) {
-      return res.status(400).json({ error: "Invalid tier" });
+    const upperTier = newTier.trim().toUpperCase();
+    if (!VALID_TIERS.includes(upperTier)) {
+      return res.status(400).json({ error: "Invalid tier", allowed: VALID_TIERS });
     }
 
+    const targetTier = upperTier;
     const currentTier = normalizeTier(user.tier);
     const tierComparison = compareTier(currentTier, targetTier);
     const limits = getTierLimits(targetTier);
@@ -69,24 +47,47 @@ router.post("/change-tier", requireAuth, async (req, res) => {
       });
     }
 
-    // If upgrading → no cleanup, just update tier
+    // If upgrading (target > current) → enforce payment authorization
     if (tierComparison === 1) {
-      await prisma.user.update({
+      const adminToken = req.headers?.["x-admin-token"];
+      const clientPaymentToken = paymentToken || req.headers?.["x-payment-token"];
+      const isDev = process.env.NODE_ENV !== "production";
+      const selfServeAllowed = process.env.ALLOW_SELF_SERVE_UPGRADES === "true" || isDev;
+      const hasAdminAuth = Boolean(process.env.ADMIN_SECRET && adminToken === process.env.ADMIN_SECRET);
+
+      if (!selfServeAllowed && !hasAdminAuth && !clientPaymentToken) {
+        return res.status(402).json({
+          error: "payment_required",
+          message: `Upgrades to ${targetTier} require valid payment verification or admin authorization.`
+        });
+      }
+
+      const updatedUser = await prisma.user.update({
         where: { id: user.id },
         data: { tier: targetTier },
       });
+
+      const token = jwt.sign(
+        {
+          userId: updatedUser.id,
+          accessToken: req.auth?.accessToken,
+          tier: updatedUser.tier,
+        },
+        process.env.JWT_SECRET,
+        { expiresIn: "7d" }
+      );
 
       return res.json({
         needsCleanup: false,
         changed: true,
         currentTier,
         newTier: targetTier,
+        token,
       });
     }
 
     // From here on → it's a downgrade (target < current)
     // We need to see what must be deleted to fit new limits.
-
     const maxProjects = limits.maxProjects;
     const maxPreviews = limits.maxPreviews;
 
@@ -105,7 +106,6 @@ router.post("/change-tier", requireAuth, async (req, res) => {
     let projectsToDelete = [];
 
     if (Number.isFinite(maxProjects) && projects.length > maxProjects) {
-      // Keep the first N projects (arbitrary but deterministic by array order)
       projectsToKeep = projects.slice(0, maxProjects);
       projectsToDelete = projects.slice(maxProjects);
     }
@@ -129,7 +129,6 @@ router.post("/change-tier", requireAuth, async (req, res) => {
     // Among kept projects, enforce maxPreviews limit
     let previewsToDeleteFromKept = [];
     if (Number.isFinite(maxPreviews) && previewsInKeptProjects.length > maxPreviews) {
-      // Keep the first maxPreviews previews, delete the rest
       previewsToDeleteFromKept = previewsInKeptProjects.slice(maxPreviews);
     }
 
@@ -169,15 +168,26 @@ router.post("/change-tier", requireAuth, async (req, res) => {
 
     // If no cleanup needed → just update tier
     if (!responseSummary.needsCleanup) {
-      await prisma.user.update({
+      const updatedUser = await prisma.user.update({
         where: { id: user.id },
         data: { tier: targetTier },
       });
+
+      const token = jwt.sign(
+        {
+          userId: updatedUser.id,
+          accessToken: req.auth?.accessToken,
+          tier: updatedUser.tier,
+        },
+        process.env.JWT_SECRET,
+        { expiresIn: "7d" }
+      );
 
       return res.json({
         ...responseSummary,
         needsCleanup: false,
         changed: true,
+        token,
         deletedProjectsCount: 0,
         deletedPreviewsCount: 0,
       });
@@ -198,11 +208,25 @@ router.post("/change-tier", requireAuth, async (req, res) => {
       }
     }
 
-    // 2. Delete previews + projects + update user.tier in a transaction
+    // 2. Delete preview metrics first, then previews, then projects in transaction
     await prisma.$transaction(async (tx) => {
-      if (previewIdsToDelete.length > 0) {
+      let allPreviewIds = [...previewIdsToDelete];
+      if (projectIdsToDelete.length > 0) {
+        const projectPreviews = await tx.preview.findMany({
+          where: { projectId: { in: projectIdsToDelete } },
+          select: { id: true },
+        });
+        allPreviewIds = [...new Set([...allPreviewIds, ...projectPreviews.map((p) => p.id)])];
+      }
+
+      if (allPreviewIds.length > 0) {
+        // Cascade delete child metrics first to satisfy foreign key integrity
+        await tx.previewMetric.deleteMany({
+          where: { previewId: { in: allPreviewIds } },
+        });
+
         await tx.preview.deleteMany({
-          where: { id: { in: previewIdsToDelete } },
+          where: { id: { in: allPreviewIds } },
         });
       }
 
@@ -218,10 +242,21 @@ router.post("/change-tier", requireAuth, async (req, res) => {
       });
     });
 
+    const token = jwt.sign(
+      {
+        userId: user.id,
+        accessToken: req.auth?.accessToken,
+        tier: targetTier,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
     return res.json({
       ...responseSummary,
       needsCleanup: false,
       changed: true,
+      token,
       deletedProjectsCount: projectIdsToDelete.length,
       deletedPreviewsCount: previewIdsToDelete.length,
     });
@@ -229,6 +264,8 @@ router.post("/change-tier", requireAuth, async (req, res) => {
     console.error("change-tier error:", err);
     return res.status(500).json({ error: "internal_error" });
   }
-});
+}
+
+router.post("/change-tier", requireAuth, handleChangeTier);
 
 export default router;

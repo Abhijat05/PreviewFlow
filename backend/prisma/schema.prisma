@@ -27,7 +27,7 @@ model User {
 model Project {
   id            String    @id @default(cuid())
   userId        String
-  user          User      @relation("UserProjects", fields: [userId], references: [id])
+  user          User      @relation("UserProjects", fields: [userId], references: [id], onDelete: Cascade)
   repoOwner     String
   repoName      String
   webhookSecret String
@@ -38,7 +38,7 @@ model Project {
 model Preview {
   id               String          @id @default(cuid())
   projectId        String
-  project          Project         @relation("ProjectPreviews", fields: [projectId], references: [id])
+  project          Project         @relation("ProjectPreviews", fields: [projectId], references: [id], onDelete: Cascade)
   prNumber         Int
   status           String
   url              String?
@@ -57,7 +57,7 @@ model PreviewMetric {
   id String @id @default(cuid())
 
   previewId String
-  preview   Preview @relation(fields: [previewId], references: [id])
+  preview   Preview @relation(fields: [previewId], references: [id], onDelete: Cascade)
 
   cpu    Float
   memory BigInt
