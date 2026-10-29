@@ -98,7 +98,10 @@ app.use("/api/account", accountTier);
 
 app.use("/", githubWebhook);
 
-app.use("/", devSim);
+// Development simulation routes - strictly disabled in production
+if (process.env.NODE_ENV !== "production") {
+  app.use("/", devSim);
+}
 
 initSocket(server);
 startStatsWorker();
