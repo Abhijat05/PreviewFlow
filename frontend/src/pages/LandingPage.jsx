@@ -43,7 +43,7 @@ export default function LandingPage() {
           <div className="animate-in fade-in slide-in-from-bottom-4 duration-700 mb-6 flex justify-center">
             <div className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white/80 backdrop-blur-sm px-3 py-1 text-xs font-medium text-gray-600 transition-colors hover:border-gray-300 hover:text-black cursor-pointer shadow-sm">
               <span className="flex h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span>v1.0 Public Beta is Live</span>
+              <span>Lost some Where</span>
               <ArrowRight size={10} className="text-gray-400" />
             </div>
           </div>
