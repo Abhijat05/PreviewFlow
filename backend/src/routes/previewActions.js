@@ -10,6 +10,18 @@ import { getTierLimits } from "../middleware/tierLimits.js";
 
 const router = express.Router();
 
+function emitScopedStatus(previewId, userId, payload) {
+  try {
+    getIO()
+      .to(`preview:${previewId}`)
+      .to(previewId)
+      .to(`user:${userId}`)
+      .emit("preview-status-update", payload);
+  } catch (err) {
+    // socket ignore
+  }
+}
+
 /* ------------------------ AUTH ------------------------ */
 function auth(req, res, next) {
   const token = req.headers.authorization?.split(" ")[1];
@@ -90,7 +102,7 @@ router.post("/preview/:id/rebuild", auth, async (req, res) => {
       }
     });
 
-    getIO().emit("preview-status-update", {
+    emitScopedStatus(preview.id, userId, {
       previewId: preview.id,
       projectId: preview.projectId,
       prNumber: preview.prNumber,
@@ -119,7 +131,7 @@ router.post("/preview/:id/rebuild", auth, async (req, res) => {
         where: { id: previewId }
       });
 
-      getIO().emit("preview-status-update", {
+      emitScopedStatus(updated.id, userId, {
         previewId: updated.id,
         projectId: updated.projectId,
         prNumber: updated.prNumber,
@@ -147,7 +159,7 @@ router.post("/preview/:id/rebuild", auth, async (req, res) => {
         where: { id: previewId }
       });
 
-      getIO().emit("preview-status-update", {
+      emitScopedStatus(updated.id, userId, {
         previewId: updated.id,
         projectId: updated.projectId,
         prNumber: updated.prNumber,
@@ -205,7 +217,7 @@ router.post("/preview/:id/delete", auth, async (req, res) => {
       where: { id: previewId }
     });
 
-    getIO().emit("preview-status-update", {
+    emitScopedStatus(updated.id, userId, {
       previewId: updated.id,
       projectId: updated.projectId,
       prNumber: updated.prNumber,

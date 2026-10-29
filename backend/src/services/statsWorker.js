@@ -2,8 +2,8 @@ import docker from "./dockerClient.js";
 import { prisma } from "../db.js";
 import { getIO } from "../socket.js";
 
-const POLL_INTERVAL = 1000; //default should be 4000
-const STORE_INTERVAL = 30000;
+const POLL_INTERVAL = 3000; // Balanced 3-second interval prevents Docker socket thrashing
+const STORE_INTERVAL = 30000; // Persist metric sample every 30 seconds
 
 const lastStoredAt = {};
 
@@ -12,6 +12,13 @@ export function startStatsWorker() {
 
   setInterval(async () => {
     try {
+      let io;
+      try {
+        io = getIO();
+      } catch {
+        return; // Socket not initialized yet
+      }
+
       const previews = await prisma.preview.findMany({
         where: {
           status: { in: ["live", "building"] },
@@ -22,12 +29,30 @@ export function startStatsWorker() {
           containerName: true,
           projectId: true,
           prNumber: true,
-          buildStartedAt: true  
+          buildStartedAt: true,
+          project: {
+            select: { userId: true }
+          }
         }
       });
 
       for (const p of previews) {
         try {
+          const now = Date.now();
+          const last = lastStoredAt[p.id] || 0;
+          const needsStore = now - last > STORE_INTERVAL;
+
+          // Check if any client is actively subscribed to this preview or user channel
+          const hasListeners =
+            Boolean(io.sockets.adapter.rooms.get(`preview:${p.id}`)?.size) ||
+            Boolean(io.sockets.adapter.rooms.get(p.id)?.size) ||
+            Boolean(p.project?.userId && io.sockets.adapter.rooms.get(`user:${p.project.userId}`)?.size);
+
+          // Optimization: Skip querying Docker if no active socket client is watching AND periodic store not due
+          if (!hasListeners && !needsStore) {
+            continue;
+          }
+
           const container = docker.getContainer(p.containerName);
           const stats = await container.stats({ stream: false });
 
@@ -74,28 +99,30 @@ export function startStatsWorker() {
                 )
               : 0;
 
-          /* ---------------- SOCKET EMIT ---------------- */
-          const io = getIO();
-          io.emit("preview-stats-update", {
-            previewId: p.id,
-            projectId: p.projectId,
-            prNumber: p.prNumber,
+          /* ---------------- SCOPED SOCKET EMIT ---------------- */
+          if (hasListeners) {
+            const target = p.project?.userId
+              ? io.to(`preview:${p.id}`).to(p.id).to(`user:${p.project.userId}`)
+              : io.to(`preview:${p.id}`).to(p.id);
 
-            cpu: Number(cpu.toFixed(2)),
-            memory,
+            target.emit("preview-stats-update", {
+              previewId: p.id,
+              projectId: p.projectId,
+              prNumber: p.prNumber,
 
-            memoryLimit,
-            memoryPercent: Number(memoryPercent.toFixed(2)),
-            networkRx,
-            networkTx,
-            uptime
-          });
+              cpu: Number(cpu.toFixed(2)),
+              memory,
+
+              memoryLimit,
+              memoryPercent: Number(memoryPercent.toFixed(2)),
+              networkRx,
+              networkTx,
+              uptime
+            });
+          }
 
           /* ---------------- STORE SAMPLE ---------------- */
-          const now = Date.now();
-          const last = lastStoredAt[p.id] || 0;
-
-          if (now - last > STORE_INTERVAL) {
+          if (needsStore) {
             try {
               await prisma.previewMetric.create({
                 data: {
@@ -114,7 +141,7 @@ export function startStatsWorker() {
           }
 
         } catch (err) {
-          console.log("stats error for", p.containerName, err.message);
+          // container not ready or stopped
         }
       }
 
