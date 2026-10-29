@@ -1,35 +1,63 @@
 // src/services/dockerService.js
 import fs from "fs";
 import path from "path";
-import { exec, execSync } from "child_process";
+import { spawn, execFile, execFileSync } from "child_process";
 import net from "net";
 import { prisma } from "../db.js";
 import { getIO } from "../socket.js";
 
 /**
- * Execute a shell command and stream logs
+ * Execute a command safely via spawn without shell expansion, streaming logs
  */
-export function run(command, onData) {
+export function runCommand(executable, args = [], onData) {
   return new Promise((resolve, reject) => {
-    const child = exec(command, { maxBuffer: 1024 * 1024 * 50 });
+    const child = spawn(executable, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true
+    });
 
-    child.stdout?.on("data", (d) => onData(d.toString()));
-    child.stderr?.on("data", (d) => onData(d.toString()));
+    child.stdout?.on("data", (d) => onData?.(d.toString()));
+    child.stderr?.on("data", (d) => onData?.(d.toString()));
 
     child.on("close", (code) => {
       if (code === 0) resolve();
-      else reject(new Error(`Command failed with exit code ${code}`));
+      else reject(new Error(`Command '${executable} ${args.join(" ")}' failed with exit code ${code}`));
     });
+
     child.on("error", reject);
   });
 }
 
 /**
- * Remove container if exists (force)
+ * Legacy shell runner maintained for backward compatibility.
+ * Splits arguments when possible or uses runCommand.
+ */
+export function run(command, onData) {
+  return new Promise((resolve, reject) => {
+    // If command starts with docker, parse args safely
+    if (typeof command === "string") {
+      const parts = command.trim().match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
+      const cleanParts = parts.map((p) => p.replace(/^["']|["']$/g, ""));
+      if (cleanParts.length > 0) {
+        const [bin, ...args] = cleanParts;
+        return runCommand(bin, args, onData).then(resolve).catch(reject);
+      }
+    }
+    reject(new Error("Invalid command provided to run()"));
+  });
+}
+
+/**
+ * Remove container if exists (force) safely without shell injection
  */
 export async function removeContainer(name) {
   return new Promise((resolve) => {
-    exec(`docker rm -f ${name}`, (err) => {
+    // Strict validation: Docker container names must only contain alphanumeric, underscore, dot, or hyphen
+    if (!name || typeof name !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/.test(name)) {
+      return resolve(false);
+    }
+
+    execFile("docker", ["rm", "-f", name], (err) => {
       resolve(!err);
     });
   });
@@ -82,7 +110,6 @@ export async function portReservedInDB(port) {
  */
 export async function findAvailablePort(minPort = 5000, maxPort = 5999) {
   for (let port = minPort; port <= maxPort; port++) {
-    // Skip ports commonly reserved (optional)
     // Check DB first (cheap)
     const reserved = await portReservedInDB(port);
     if (reserved) continue;
@@ -98,7 +125,7 @@ export async function findAvailablePort(minPort = 5000, maxPort = 5999) {
 
     return port;
   }
-  throw new Error("No free ports available in configured range (4000-4999)");
+  throw new Error("No free ports available in configured range (5000-5999)");
 }
 
 /* ===========================
@@ -112,15 +139,17 @@ export async function findAvailablePort(minPort = 5000, maxPort = 5999) {
  * We sanitize to lowercase and only allow alphanumerics and hyphens.
  */
 export function generateContainerName(project, prNumber, buildNumber) {
-  // project may be the project record or strings repoOwner/repoName can be used
-  // Keep name short: include project id prefix to ensure uniqueness across projects
-  const projectIdShort = (project.id || "")
+  const projectIdShort = (project?.id || "")
     .toString()
-    .slice(0, 8); // 8 chars of cuid to keep name length reasonable
+    .slice(0, 8)
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
 
-  const base = `preview-p${projectIdShort}-pr${prNumber}-b${buildNumber}`;
-  // sanitize
-  return base.toLowerCase().replace(/[^a-z0-9\-]/g, "-");
+  const safePrNumber = String(prNumber).replace(/[^0-9]/g, "") || "1";
+  const safeBuildNumber = String(buildNumber).replace(/[^0-9]/g, "") || "1";
+
+  const base = `preview-p${projectIdShort}-pr${safePrNumber}-b${safeBuildNumber}`;
+  return base.toLowerCase().replace(/[^a-z0-9-]/g, "-");
 }
 
 /* ===========================
@@ -129,25 +158,30 @@ export function generateContainerName(project, prNumber, buildNumber) {
 
 /**
  * Remove container forcibly if exists.
- * Uses `docker ps -aq -f name=<name>` to find matching containers and removes them.
+ * Uses `docker ps -aq -f name=<name>` safely without shell interpolation.
  */
 export function removeContainerIfExists(containerName) {
   try {
-    const ids = execSync(`docker ps -aq -f name=${containerName}`).toString().trim();
-    if (ids) {
-      // May return multiple ids if names partially match; loop lines
-      const lines = ids.split(/\s+/).filter(Boolean);
-      for (const id of lines) {
+    if (!containerName || typeof containerName !== "string" || !/^[a-zA-Z0-9_.-]+$/.test(containerName)) {
+      return;
+    }
+
+    const output = execFileSync("docker", ["ps", "-aq", "-f", `name=${containerName}`], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim();
+
+    if (output) {
+      const ids = output.split(/\s+/).filter((id) => /^[a-zA-Z0-9]+$/.test(id));
+      for (const id of ids) {
         try {
-          execSync(`docker rm -f ${id}`);
+          execFileSync("docker", ["rm", "-f", id], { stdio: "ignore" });
         } catch (err) {
-          // ignore individual errors, continue
           console.warn("Failed to remove container", id, err?.message || err);
         }
       }
     }
   } catch (err) {
-    // Not fatal
     console.warn("Error checking/removing container", err?.message || err);
   }
 }
@@ -164,12 +198,6 @@ export function removeContainerIfExists(containerName) {
  *   - previewId: Prisma preview.id
  *   - repoPath: local path to cloned repo
  *   - prNumber: PR number
- *
- * Behavior:
- *  - increments buildNumber (if necessary) and uses it in container name
- *  - finds an available host port and atomically saves it to preview record
- *  - saves containerName to preview record
- *  - on failure: frees reserved port in DB (sets port = null) and sets status = "error"
  */
 export async function buildPreview({ project, previewId, repoPath, prNumber }) {
   let logs = "";
@@ -196,10 +224,7 @@ export async function buildPreview({ project, previewId, repoPath, prNumber }) {
   const preview = await prisma.preview.findUnique({ where: { id: previewId } });
   if (!preview) throw new Error("Preview row not found: " + previewId);
 
-  // Decide buildNumber: use preview.buildNumber (already default 1).
-  // For each build we will increment buildNumber in DB BEFORE launching the container,
-  // so container name will contain the increment.
-  const nextBuildNumber = (preview.buildNumber || 1);
+  const nextBuildNumber = preview.buildNumber || 1;
 
   // generate deterministic container name
   const containerName = generateContainerName(project, prNumber, nextBuildNumber);
@@ -212,10 +237,8 @@ export async function buildPreview({ project, previewId, repoPath, prNumber }) {
 
   try {
     if (!assignedPort) {
-      // find a free port and reserve it in DB immediately
       const freePort = await findAvailablePort(5000, 5999);
 
-      // Save assigned port in DB (reserving it)
       await prisma.preview.update({
         where: { id: previewId },
         data: { port: freePort }
@@ -223,11 +246,9 @@ export async function buildPreview({ project, previewId, repoPath, prNumber }) {
 
       assignedPort = freePort;
     } else {
-      // There is a port recorded: check if it's actually free on OS.
       const free = await isPortFree(assignedPort);
       if (!free) {
-        // Port clash / bound by something else -> find another port and update DB
-        const freePort = await findAvailablePort(4000, 4999);
+        const freePort = await findAvailablePort(5000, 5999);
         await prisma.preview.update({
           where: { id: previewId },
           data: { port: freePort }
@@ -236,39 +257,43 @@ export async function buildPreview({ project, previewId, repoPath, prNumber }) {
       }
     }
 
-    // Persist containerName & increment buildNumber.
-    // We increment buildNumber so the next rebuild gets a new container name.
-    const updatedPreview = await prisma.preview.update({
+    await prisma.preview.update({
       where: { id: previewId },
       data: {
         containerName,
-        // increment buildNumber for the stored preview so next rebuild increments again
         buildNumber: { increment: 1 }
       }
     });
 
-    // Build image
-    const baseName = `${project.repoOwner}-${project.repoName}-pr-${prNumber}`
-      .toLowerCase()
-      .replace(/[^a-z0-9\-]/g, "-");
+    // Build image name sanitized
+    const safeOwner = String(project.repoOwner || "").replace(/[^a-zA-Z0-9_.-]/g, "-");
+    const safeRepo = String(project.repoName || "").replace(/[^a-zA-Z0-9_.-]/g, "-");
+    const safePr = String(prNumber).replace(/[^0-9]/g, "");
+    const imageName = `${safeOwner}-${safeRepo}-pr-${safePr}`.toLowerCase();
 
-    const imageName = baseName;
-
-    // Choose dockerfile template (existing behavior)
+    // Choose dockerfile template
     const dockerfile = path.resolve("deploy-templates/vite.Dockerfile");
 
-    push(`\n> docker build -t ${imageName} -f "${dockerfile}" "${repoPath}"\n`);
-    await run(
-      `docker build -t ${imageName} -f "${dockerfile}" "${repoPath}"`,
-      push
-    );
+    // Secure build execution via spawn
+    const buildArgs = ["build", "-t", imageName, "-f", dockerfile, repoPath];
+    push(`\n> docker ${buildArgs.join(" ")}\n`);
+    await runCommand("docker", buildArgs, push);
 
-    // Run container mapping assignedPort to container port 80 (keep same as original)
-    push(`\n> docker run -d --name ${containerName} -p ${assignedPort}:80 ${imageName}\n`);
-    await run(
-      `docker run -d --name ${containerName} -p ${assignedPort}:80 ${imageName}`,
-      push
-    );
+    // Secure run execution with resource limits & safe port binding to localhost
+    const runArgs = [
+      "run",
+      "-d",
+      "--name", containerName,
+      "--pids-limit", "100",
+      "--memory", "512m",
+      "--cpus", "1.0",
+      "--security-opt", "no-new-privileges",
+      "--cap-drop", "ALL",
+      "-p", `127.0.0.1:${assignedPort}:80`,
+      imageName
+    ];
+    push(`\n> docker ${runArgs.join(" ")}\n`);
+    await runCommand("docker", runArgs, push);
 
     // Build completed
     const url = `http://localhost:${assignedPort}`;
@@ -290,7 +315,6 @@ export async function buildPreview({ project, previewId, repoPath, prNumber }) {
 
     return url;
   } catch (err) {
-    // On error: free DB port reservation (set port = null) so other builds can use it
     try {
       await prisma.preview.update({
         where: { id: previewId },
