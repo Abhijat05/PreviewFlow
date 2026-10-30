@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import axios from "axios";
 import api from "../api.js";
+import { useAuth } from "../context/AuthContext.jsx";
 import { Github, Search, Loader2, ArrowRight, Layout, ArrowLeft, Lock, Zap, CheckCircle2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -11,20 +12,13 @@ const TIER_LIMITS = {
   ENTERPRISE: { projects: Infinity, allowWebhook: true }
 };
 
-const getUserTier = (token) => {
-  try {
-    const payload = JSON.parse(atob(token.split('.')[1]));
-    return (payload.tier || 'FREE').toUpperCase();
-  } catch { return 'FREE'; }
-};
-
 export default function ConnectRepo() {
   const [repos, setRepos] = useState([]);
   const [existingProjects, setExistingProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [connectingId, setConnectingId] = useState(null);
-  const [userTier, setUserTier] = useState("FREE");
+  const { tier: userTier } = useAuth();
 
   const navigate = useNavigate();
 
@@ -32,12 +26,9 @@ export default function ConnectRepo() {
     const token = localStorage.getItem("token");
     if (!token) return;
 
-    // 1. Initial Tier from Token
-    setUserTier(getUserTier(token));
-
     const controller = new AbortController();
 
-    // 2. Fetch Repos & Projects using central api client
+    // Fetch Repos & Projects using central api client
     Promise.all([
       api.get("/api/repos", { signal: controller.signal }),
       api.get("/api/projects", { signal: controller.signal })
@@ -50,15 +41,6 @@ export default function ConnectRepo() {
         console.error(err);
         setLoading(false);
       }
-    });
-
-    // 3. Fetch User Profile to Sync Tier (Fresh from DB)
-    api.get("/api/user/me", {
-      signal: controller.signal
-    }).then(res => {
-      if (res.data.tier) setUserTier(res.data.tier.toUpperCase());
-    }).catch(err => { 
-      if (!axios.isCancel(err)) console.error("Failed to sync tier", err); 
     });
 
     return () => controller.abort();

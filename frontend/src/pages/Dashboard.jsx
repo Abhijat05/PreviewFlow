@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import api, { API_BASE_URL } from "../api.js";
 import { useSocket } from "../context/SocketContext.jsx";
+import { useAuth } from "../context/AuthContext.jsx";
 import { useNavigate } from "react-router-dom";
 import Logs from "./Logs.jsx"; 
 import PlanChangeModal from "../components/PlanChangeModal.jsx"; 
@@ -17,18 +18,6 @@ const TIER_CONFIG = {
   HOBBY: { label: 'Hobby', color: 'bg-blue-50 text-blue-600 border-blue-200', concurrentBuilds: 1 },
   PRO: { label: 'Pro', color: 'bg-indigo-50 text-indigo-600 border-indigo-200', concurrentBuilds: Infinity },
   ENTERPRISE: { label: 'Enterprise', color: 'bg-slate-900 text-amber-400 border-slate-700', concurrentBuilds: Infinity }
-};
-
-const getUserTier = (token) => {
-  try {
-    if (!token) return 'FREE';
-    const base64Url = token.split('.')[1];
-    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    const payload = JSON.parse(window.atob(base64));
-    return (payload.tier || 'FREE').toUpperCase();
-  } catch (e) {
-    return 'FREE';
-  }
 };
 
 // --- HELPERS ---
@@ -252,7 +241,6 @@ export default function Dashboard() {
   const [processingPreview, setProcessingPreview] = useState(null);
   const [activeLogId, setActiveLogId] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
-  const [currentTier, setCurrentTier] = useState("FREE");
   const [toast, setToast] = useState(null);
   const [isPlanModalOpen, setIsPlanModalOpen] = useState(false);
   const [stats, setStats] = useState({});
@@ -260,16 +248,16 @@ export default function Dashboard() {
   const token = localStorage.getItem("token");
   const navigate = useNavigate();
   const { socket, joinPreview } = useSocket();
+  const { tier: currentTier, refreshUser } = useAuth();
 
   const refreshData = async () => {
     if (!token) return;
     try {
-      const [projRes, userRes] = await Promise.all([
+      const [projRes] = await Promise.all([
         api.get("/api/projects"),
-        api.get("/api/user/me")
+        refreshUser()
       ]);
       setProjects(projRes.data);
-      if (userRes.data.tier) setCurrentTier(userRes.data.tier.toUpperCase());
     } catch (err) {
       console.error("Failed to refresh data", err);
     }
@@ -277,7 +265,6 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!token) return;
-    setCurrentTier(getUserTier(token));
     refreshData();
 
     const controller = new AbortController();

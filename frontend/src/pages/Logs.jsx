@@ -3,14 +3,8 @@ import { useParams, useNavigate } from "react-router-dom";
 import api, { API_BASE_URL } from "../api.js";
 import axios from "axios";
 import { useSocket } from "../context/SocketContext.jsx";
+import { useAuth } from "../context/AuthContext.jsx";
 import { X, Copy, Loader2, ArrowDownCircle, Lock } from "lucide-react";
-
-const getUserTier = (token) => {
-  try {
-    const payload = JSON.parse(atob(token.split('.')[1]));
-    return (payload.tier || 'FREE').toUpperCase();
-  } catch { return 'FREE'; }
-};
 
 const ALLOW_SOCKET_TIERS = ['PRO', 'ENTERPRISE'];
 
@@ -83,10 +77,10 @@ export default function Logs({ previewId, onClose }) {
   const [logs, setLogs] = useState("");
   const [status, setStatus] = useState("loading");
   const [autoScroll, setAutoScroll] = useState(true);
-  const [userTier, setUserTier] = useState("FREE");
   const [error, setError] = useState(null);
   
   const { socket, joinPreview, leavePreview } = useSocket();
+  const { tier: userTier } = useAuth();
   const isMounted = useRef(true);
   const token = localStorage.getItem("token");
   const navigate = useNavigate();
@@ -130,15 +124,6 @@ export default function Logs({ previewId, onClose }) {
         }
       });
 
-    // Sync Tier from API
-    axios.get("http://localhost:4000/api/user/me", {
-      headers: { Authorization: `Bearer ${token}` },
-      signal: controller.signal
-    }).then(res => {
-      if (isMounted.current && res.data.tier) setUserTier(res.data.tier.toUpperCase());
-    }).catch(err => { 
-      if (!axios.isCancel(err)) console.error("Failed to sync tier", err); 
-    });
 
     return () => controller.abort();
   }, [id, token, navigate, isEmbedded]);
