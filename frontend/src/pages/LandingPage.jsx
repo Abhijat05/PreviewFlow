@@ -8,7 +8,8 @@ import {
 } from "lucide-react";
 import Navbar from "../components/Navbar.jsx"; 
 import Footer from "../components/Footer.jsx"; 
-import { cn } from "../lib/utils.js"; 
+import { cn } from "../lib/utils.js";
+import { API_BASE_URL } from "../api.js"; 
 
 export default function LandingPage() {
   const navigate = useNavigate();
@@ -23,7 +24,7 @@ export default function LandingPage() {
     if (isLoggedIn) {
       navigate("/dashboard");
     } else {
-      window.location.href = "http://localhost:4000/auth/github";
+      window.location.href = `${API_BASE_URL}/auth/github`;
     }
   };
 

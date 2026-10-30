@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import axios from "axios";
+import api from "../api.js";
 import { Github, Search, Loader2, ArrowRight, Layout, ArrowLeft, Lock, Zap, CheckCircle2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -36,10 +37,10 @@ export default function ConnectRepo() {
 
     const controller = new AbortController();
 
-    // 2. Fetch Repos & Projects
+    // 2. Fetch Repos & Projects using central api client
     Promise.all([
-      axios.get("http://localhost:4000/api/repos", { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal }),
-      axios.get("http://localhost:4000/api/projects", { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal })
+      api.get("/api/repos", { signal: controller.signal }),
+      api.get("/api/projects", { signal: controller.signal })
     ]).then(([reposRes, projectsRes]) => {
       setRepos(reposRes.data);
       setExistingProjects(projectsRes.data);
@@ -52,8 +53,7 @@ export default function ConnectRepo() {
     });
 
     // 3. Fetch User Profile to Sync Tier (Fresh from DB)
-    axios.get("http://localhost:4000/api/user/me", {
-      headers: { Authorization: `Bearer ${token}` },
+    api.get("/api/user/me", {
       signal: controller.signal
     }).then(res => {
       if (res.data.tier) setUserTier(res.data.tier.toUpperCase());
@@ -65,7 +65,6 @@ export default function ConnectRepo() {
   }, []);
 
   const handleConnect = async (r) => {
-    const token = localStorage.getItem("token");
     const limits = TIER_LIMITS[userTier];
 
     if (existingProjects.length >= limits.projects) {
@@ -76,17 +75,15 @@ export default function ConnectRepo() {
     setConnectingId(r.fullName);
 
     try {
-      const res = await axios.post("http://localhost:4000/api/connect-repo", {
+      const res = await api.post("/api/connect-repo", {
         repoOwner: r.owner,
         repoName: r.name
-      }, { headers: { Authorization: `Bearer ${token}` } });
+      });
 
       const projectId = res.data.project.id;
 
       if (limits.allowWebhook) {
-        await axios.post("http://localhost:4000/api/create-webhook", { projectId }, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
+        await api.post("/api/create-webhook", { projectId });
       }
 
       alert(`✅ ${r.name} Connected!`);

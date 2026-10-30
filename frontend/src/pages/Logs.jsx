@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
+import api, { API_BASE_URL } from "../api.js";
 import axios from "axios";
 import { io } from "socket.io-client";
 import { X, Copy, Loader2, ArrowDownCircle, Lock } from "lucide-react";
@@ -110,7 +111,7 @@ export default function Logs({ previewId, onClose }) {
     setError(null);
 
     // Fetch Logs
-    axios.get(`http://localhost:4000/api/preview/${id}/logs`, { 
+    api.get(`/api/preview/${id}/logs`, { 
       headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal
     })

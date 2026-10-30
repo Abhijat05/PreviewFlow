@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
-import axios from 'axios';
+import api, { API_BASE_URL } from '../api.js';
 import { bytesToMB, getChartTimestamp } from '../lib/metrics';
 
-const socket = io("http://localhost:4000", { transports: ["websocket"] });
+const socket = io(API_BASE_URL, { transports: ["websocket"] });
 
 export function usePreviewStats(previewId, initialRange = '1h', maxSamples = 100) {
   const [history, setHistory] = useState([]);
@@ -17,7 +17,6 @@ export function usePreviewStats(previewId, initialRange = '1h', maxSamples = 100
   // We use a ref to safely drop socket events while the API is still fetching
   // This prevents race conditions where a socket tick overwrites the history array
   const isFetchingRef = useRef(true);
-  const token = localStorage.getItem("token");
 
   // 1. Fetch History on Mount or Range Change
   useEffect(() => {
@@ -30,9 +29,7 @@ export function usePreviewStats(previewId, initialRange = '1h', maxSamples = 100
       setError(null);
 
       try {
-        const res = await axios.get(`http://localhost:4000/api/previews/${previewId}/metrics?range=${timeRange}`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
+        const res = await api.get(`/api/previews/${previewId}/metrics?range=${timeRange}`);
         
         if (!isMounted) return;
 
@@ -68,7 +65,7 @@ export function usePreviewStats(previewId, initialRange = '1h', maxSamples = 100
     fetchHistory();
 
     return () => { isMounted = false; };
-  }, [previewId, timeRange, token]);
+  }, [previewId, timeRange]);
 
   // 2. Real-time Socket Subscription
   useEffect(() => {

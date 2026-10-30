@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from "react";
-import axios from "axios";
+import api, { API_BASE_URL } from "../api.js";
 import io from "socket.io-client";
 import { useNavigate } from "react-router-dom";
 import Logs from "./Logs.jsx"; 
@@ -31,7 +31,7 @@ const getUserTier = (token) => {
   }
 };
 
-const socket = io("http://localhost:4000", { transports: ["websocket"] });
+const socket = io(API_BASE_URL, { transports: ["websocket"] });
 
 // --- HELPERS ---
 function formatDuration(seconds) { 
@@ -266,8 +266,8 @@ export default function Dashboard() {
     if (!token) return;
     try {
       const [projRes, userRes] = await Promise.all([
-        axios.get("http://localhost:4000/api/projects", { headers: { Authorization: `Bearer ${token}` } }),
-        axios.get("http://localhost:4000/api/user/me", { headers: { Authorization: `Bearer ${token}` } })
+        api.get("/api/projects"),
+        api.get("/api/user/me")
       ]);
       setProjects(projRes.data);
       if (userRes.data.tier) setCurrentTier(userRes.data.tier.toUpperCase());
@@ -328,7 +328,7 @@ export default function Dashboard() {
       return;
     }
     setProcessingPreview(pre.id);
-    try { await axios.post(`http://localhost:4000/api/preview/${pre.id}/rebuild`, {}, { headers: { Authorization: `Bearer ${token}` } }); } catch(e) { console.error(e); }
+    try { await api.post(`/api/preview/${pre.id}/rebuild`, {}); } catch(e) { console.error(e); }
     setProcessingPreview(null);
   }, [activeBuildsCount, tierConfig, token]);
 
@@ -341,7 +341,7 @@ export default function Dashboard() {
     const pre = deleteConfirm;
     setProcessingPreview(pre.id);
     setDeleteConfirm(null);
-    try { await axios.post(`http://localhost:4000/api/preview/${pre.id}/delete`, {}, { headers: { Authorization: `Bearer ${token}` } }); } catch(e) { console.error(e); }
+    try { await api.post(`/api/preview/${pre.id}/delete`, {}); } catch(e) { console.error(e); }
     setProcessingPreview(null);
   };
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import axios from "axios";
+import api from "../api.js";
 import { 
   Check, AlertTriangle, Loader2, X, Shield, ArrowRight, Trash2, Box 
 } from "lucide-react";
@@ -16,8 +16,6 @@ export default function PlanChangeModal({ isOpen, onClose, currentTier, onPlanCh
   const [loading, setLoading] = useState(false);
   const [step, setStep] = useState('SELECT'); // SELECT | CONFIRM
   const [cleanupData, setCleanupData] = useState(null);
-  
-  // 1. New State for scoping fix
   const [needsCleanupFlag, setNeedsCleanupFlag] = useState(false);
 
   useEffect(() => {
@@ -25,7 +23,7 @@ export default function PlanChangeModal({ isOpen, onClose, currentTier, onPlanCh
       setSelectedTier(currentTier);
       setStep('SELECT');
       setCleanupData(null);
-      setNeedsCleanupFlag(false); // Reset flag on open
+      setNeedsCleanupFlag(false);
     }
   }, [isOpen, currentTier]);
 
@@ -33,20 +31,16 @@ export default function PlanChangeModal({ isOpen, onClose, currentTier, onPlanCh
     if (!selectedTier || selectedTier === currentTier) return;
     
     setLoading(true);
-    const token = localStorage.getItem("token");
 
     try {
-      const res = await axios.post("http://localhost:4000/api/account/change-tier", {
+      const res = await api.post("/api/account/change-tier", {
         newTier: selectedTier,
         confirmCleanup
-      }, {
-        headers: { Authorization: `Bearer ${token}` }
       });
 
       const { needsCleanup, changed, willDeleteProjects, willDeletePreviews } = res.data;
 
       if (needsCleanup) {
-        // 2. Store the flag
         setNeedsCleanupFlag(true);
         setCleanupData({ projects: willDeleteProjects, previews: willDeletePreviews });
         setStep('CONFIRM');
@@ -55,7 +49,6 @@ export default function PlanChangeModal({ isOpen, onClose, currentTier, onPlanCh
       }
 
       if (changed) {
-        // 3. Reset flag on success
         setNeedsCleanupFlag(false);
         onPlanChanged(); // Refresh dashboard
         showToast('Plan changed successfully', 'success');
@@ -64,14 +57,9 @@ export default function PlanChangeModal({ isOpen, onClose, currentTier, onPlanCh
 
     } catch (err) {
       console.error(err);
-      showToast('Something went wrong', 'error');
+      showToast(err.response?.data?.message || 'Something went wrong', 'error');
     } finally {
-      // 4. Corrected logic using state variable
-      if (!needsCleanupFlag || confirmCleanup) {
-        setLoading(false);
-      } else {
-        setLoading(false);
-      }
+      setLoading(false);
     }
   };
 
@@ -213,5 +201,5 @@ function CheckCircleIcon() {
     <div className="bg-black text-white rounded-full p-0.5">
       <Check size={10} />
     </div>
-  )
+  );
 }

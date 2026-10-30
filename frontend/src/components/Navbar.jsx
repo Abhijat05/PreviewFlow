@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Layout } from "lucide-react";
-import { Link, useNavigate, useLocation } from "react-router-dom"; 
+import { Link, useNavigate, useLocation } from "react-router-dom";
+import { API_BASE_URL } from "../api.js"; 
 
 export default function Navbar() {
   const navigate = useNavigate();
@@ -23,7 +24,7 @@ export default function Navbar() {
     if (isLoggedIn) {
       navigate("/dashboard");
     } else {
-      window.location.href = "http://localhost:4000/auth/github";
+      window.location.href = `${API_BASE_URL}/auth/github`;
     }
   };
 
