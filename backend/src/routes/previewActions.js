@@ -10,7 +10,7 @@ import { getTierLimits } from "../middleware/tierLimits.js";
 
 const router = express.Router();
 
-function emitScopedStatus(previewId, userId, payload) {
+export function emitScopedStatus(previewId, userId, payload) {
   try {
     getIO()
       .to(`preview:${previewId}`)
@@ -36,7 +36,7 @@ function auth(req, res, next) {
 }
 
 /* ------------------------ HELPERS ------------------------ */
-async function enforceBuildLimit(userId, tier) {
+export async function enforceBuildLimit(userId, tier) {
   const limits = getTierLimits(tier);
 
   const activeBuilds = await prisma.preview.count({
@@ -58,13 +58,17 @@ async function enforceBuildLimit(userId, tier) {
 
 /* ----------------------------------------------------------
    POST /api/preview/:id/rebuild
-   Fully rebuild preview WITH tier enforcement
+   Fully rebuild preview WITH tier enforcement & async job execution
 ----------------------------------------------------------- */
-router.post("/preview/:id/rebuild", auth, async (req, res) => {
+export async function handleRebuildPreview(req, res) {
   try {
-    const previewId = req.params.id;
-    const userId = req.user.userId;
-    const tier = req.user.tier;
+    const previewId = req.params?.id;
+    const userId = req.user?.userId;
+    const tier = req.user?.tier;
+
+    if (!previewId) {
+      return res.status(400).json({ error: "Missing preview id" });
+    }
 
     /* 1️⃣ Validate preview exists & belongs to user */
     const preview = await prisma.preview.findUnique({
@@ -77,18 +81,21 @@ router.post("/preview/:id/rebuild", auth, async (req, res) => {
       return res.status(403).json({ error: "Not allowed" });
     }
 
-    /* 2️⃣ Enforce Tier Build Limits */
+    /* 2️⃣ Concurrency protection: prevent duplicate overlapping builds */
+    if (preview.status === "building") {
+      return res.status(409).json({
+        error: "build_already_in_progress",
+        message: "A build is already currently in progress for this preview."
+      });
+    }
+
+    /* 3️⃣ Enforce Tier Build Limits */
     const check = await enforceBuildLimit(userId, tier);
     if (!check.allowed) {
       return res.status(429).json({
         error: "build_limit_reached",
         message: check.message
       });
-    }
-
-    /* 3️⃣ Stop previous container if exists */
-    if (preview.containerName) {
-      await removeContainer(preview.containerName);
     }
 
     /* 4️⃣ Mark DB as building immediately */
@@ -110,84 +117,95 @@ router.post("/preview/:id/rebuild", auth, async (req, res) => {
       url: null
     });
 
-    /* 5️⃣ Clone repo & Build */
-    const repoPath = await cloneRepo({
-      repoOwner: preview.project.repoOwner,
-      repoName: preview.project.repoName
+    /* 5️⃣ Return 202 Accepted immediately so HTTP reverse proxies don't timeout */
+    res.status(202).json({
+      ok: true,
+      status: "building",
+      message: "Build started successfully",
+      previewId
     });
 
-    try {
-      const url = await buildPreview({
-        project: preview.project,
-        previewId,
-        repoPath,
-        prNumber: preview.prNumber
-      });
-
-      // Cleanup
-      try { fs.rmSync(repoPath, { recursive: true, force: true }); } catch {}
-
-      const updated = await prisma.preview.findUnique({
-        where: { id: previewId }
-      });
-
-      emitScopedStatus(updated.id, userId, {
-        previewId: updated.id,
-        projectId: updated.projectId,
-        prNumber: updated.prNumber,
-        status: updated.status,
-        url: updated.url,
-        buildStartedAt: updated.buildStartedAt,
-        buildCompletedAt: updated.buildCompletedAt,
-        containerName: updated.containerName
-      });
-
-      return res.json({ ok: true, url });
-    } catch (err) {
-      /* 6️⃣ Build failed → Update DB + Emit error */
-      await prisma.preview.update({
-        where: { id: previewId },
-        data: {
-          status: "error",
-          buildCompletedAt: new Date(),
-          url: null,
-          containerName: null
+    /* 6️⃣ Execute the build asynchronously in background worker */
+    (async () => {
+      let repoPath = null;
+      try {
+        if (preview.containerName) {
+          await removeContainer(preview.containerName);
         }
-      });
 
-      const updated = await prisma.preview.findUnique({
-        where: { id: previewId }
-      });
+        repoPath = await cloneRepo({
+          repoOwner: preview.project.repoOwner,
+          repoName: preview.project.repoName
+        });
 
-      emitScopedStatus(updated.id, userId, {
-        previewId: updated.id,
-        projectId: updated.projectId,
-        prNumber: updated.prNumber,
-        status: updated.status,
-        url: updated.url,
-        buildStartedAt: updated.buildStartedAt,
-        buildCompletedAt: updated.buildCompletedAt
-      });
+        const url = await buildPreview({
+          project: preview.project,
+          previewId,
+          repoPath,
+          prNumber: preview.prNumber
+        });
 
-      try { fs.rmSync(repoPath, { recursive: true, force: true }); } catch {}
+        const updated = await prisma.preview.findUnique({
+          where: { id: previewId }
+        });
 
-      return res.status(500).json({ ok: false, error: "Build failed" });
-    }
+        emitScopedStatus(updated.id, userId, {
+          previewId: updated.id,
+          projectId: updated.projectId,
+          prNumber: updated.prNumber,
+          status: updated.status,
+          url: updated.url,
+          buildStartedAt: updated.buildStartedAt,
+          buildCompletedAt: updated.buildCompletedAt,
+          containerName: updated.containerName
+        });
+      } catch (err) {
+        console.error(`Async build failed for preview ${previewId}:`, err?.message || err);
+
+        await prisma.preview.update({
+          where: { id: previewId },
+          data: {
+            status: "error",
+            buildCompletedAt: new Date(),
+            url: null,
+            containerName: null
+          }
+        });
+
+        const updated = await prisma.preview.findUnique({
+          where: { id: previewId }
+        });
+
+        emitScopedStatus(updated.id, userId, {
+          previewId: updated.id,
+          projectId: updated.projectId,
+          prNumber: updated.prNumber,
+          status: updated.status,
+          url: updated.url,
+          buildStartedAt: updated.buildStartedAt,
+          buildCompletedAt: updated.buildCompletedAt
+        });
+      } finally {
+        if (repoPath) {
+          try { fs.rmSync(repoPath, { recursive: true, force: true }); } catch {}
+        }
+      }
+    })();
 
   } catch (err) {
     console.error("rebuild error:", err);
     return res.status(500).json({ error: "Unexpected error" });
   }
-});
+}
 
 /* ----------------------------------------------------------
    POST /api/preview/:id/delete
    Delete preview with safe container removal
 ----------------------------------------------------------- */
-router.post("/preview/:id/delete", auth, async (req, res) => {
+export async function handleDeletePreview(req, res) {
   try {
-    const previewId = req.params.id;
-    const userId = req.user.userId;
+    const previewId = req.params?.id;
+    const userId = req.user?.userId;
 
     const preview = await prisma.preview.findUnique({
       where: { id: previewId },
@@ -233,6 +251,9 @@ router.post("/preview/:id/delete", auth, async (req, res) => {
     console.error("delete preview error:", err);
     return res.status(500).json({ error: "Delete failed" });
   }
-});
+}
+
+router.post("/preview/:id/rebuild", auth, handleRebuildPreview);
+router.post("/preview/:id/delete", auth, handleDeletePreview);
 
 export default router;

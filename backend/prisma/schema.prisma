@@ -34,6 +34,9 @@ model Project {
   accessToken   String?
   webhookId     String?
   previews      Preview[] @relation("ProjectPreviews")
+
+  @@index([userId])
+  @@index([repoOwner, repoName])
 }
 
 model Preview {
@@ -52,6 +55,8 @@ model Preview {
   metrics          PreviewMetric[]
 
   @@unique([projectId, prNumber])
+  @@index([status])
+  @@index([port])
 }
 
 model PreviewMetric {
