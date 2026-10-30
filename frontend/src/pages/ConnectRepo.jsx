@@ -87,7 +87,7 @@ export default function ConnectRepo() {
       }
 
       alert(`✅ ${r.name} Connected!`);
-      navigate("/");
+      navigate("/dashboard");
 
     } catch (err) {
       console.error(err);
