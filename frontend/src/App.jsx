@@ -9,7 +9,7 @@ import LandingPage from "./pages/LandingPage.jsx";
 import Pricing from "./pages/Pricing.jsx";
 import PreviewMetrics from "./pages/PreviewMetrics.jsx";
 
-import { AuthProvider, useAuth } from "./context/AuthContext.jsx";
+import { useAuth } from "./context/AuthContext.jsx";
 
 function ProtectedRoute({ children }) {
   const { token, loading } = useAuth();
@@ -80,10 +80,8 @@ function AppRoutes() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <AppRoutes />
-      </BrowserRouter>
-    </AuthProvider>
+    <BrowserRouter>
+      <AppRoutes />
+    </BrowserRouter>
   );
 }
