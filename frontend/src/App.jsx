@@ -67,13 +67,21 @@ function AppRoutes() {
         }
       />
 
+      {/* Metrics */}
+      <Route
+        path="/metrics/:id"
+        element={
+          <ProtectedRoute>
+            <PreviewMetrics />
+          </ProtectedRoute>
+        }
+      />
+
       {/* If logged in and they try an unknown route → /dashboard */}
       <Route
         path="*"
         element={token ? <Navigate to="/dashboard" replace /> : <Navigate to="/" replace />}
       />
-
-      <Route path="/metrics/:id" element={<PreviewMetrics />} />
     </Routes>
   );
 }
