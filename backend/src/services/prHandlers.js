@@ -39,7 +39,9 @@ export async function handlePROpenOrSync({ project, prNumber, ref }) {
   const repoPath = await cloneRepo({
     repoOwner: project.repoOwner,
     repoName: project.repoName,
-    ref
+    ref,
+    prNumber,
+    accessToken: project.accessToken
   });
 
   try {

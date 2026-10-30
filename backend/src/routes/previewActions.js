@@ -135,7 +135,9 @@ export async function handleRebuildPreview(req, res) {
 
         repoPath = await cloneRepo({
           repoOwner: preview.project.repoOwner,
-          repoName: preview.project.repoName
+          repoName: preview.project.repoName,
+          prNumber: preview.prNumber,
+          accessToken: preview.project.accessToken
         });
 
         const url = await buildPreview({
