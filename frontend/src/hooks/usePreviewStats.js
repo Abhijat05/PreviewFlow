@@ -1,13 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
-import { io } from 'socket.io-client';
+import { useSocket } from '../context/SocketContext.jsx';
 import api, { API_BASE_URL } from '../api.js';
 import { bytesToMB, getChartTimestamp } from '../lib/metrics';
-
-const socket = io(API_BASE_URL, { transports: ["websocket"] });
 
 export function usePreviewStats(previewId, initialRange = '1h', maxSamples = 100) {
   const [history, setHistory] = useState([]);
   const [currentStats, setCurrentStats] = useState(null);
+  const { socket, joinPreview, leavePreview } = useSocket();
   
   // States for UI
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
@@ -69,7 +68,9 @@ export function usePreviewStats(previewId, initialRange = '1h', maxSamples = 100
 
   // 2. Real-time Socket Subscription
   useEffect(() => {
-    if (!previewId) return;
+    if (!previewId || !socket) return;
+
+    joinPreview(previewId);
 
     const handleStatsUpdate = (payload) => {
       if (payload.previewId !== previewId) return;
@@ -105,8 +106,11 @@ export function usePreviewStats(previewId, initialRange = '1h', maxSamples = 100
     };
 
     socket.on("preview-stats-update", handleStatsUpdate);
-    return () => socket.off("preview-stats-update", handleStatsUpdate);
-  }, [previewId, maxSamples]);
+    return () => {
+      socket.off("preview-stats-update", handleStatsUpdate);
+      leavePreview(previewId);
+    };
+  }, [previewId, maxSamples, socket, joinPreview, leavePreview]);
 
   // Derived peak calculations for the UI
   const peakCpu = history.length > 0 ? Math.max(...history.map(d => d.cpu)).toFixed(1) : 0;

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import api, { API_BASE_URL } from "../api.js";
 import axios from "axios";
-import { io } from "socket.io-client";
+import { useSocket } from "../context/SocketContext.jsx";
 import { X, Copy, Loader2, ArrowDownCircle, Lock } from "lucide-react";
 
 const getUserTier = (token) => {
@@ -86,7 +86,7 @@ export default function Logs({ previewId, onClose }) {
   const [userTier, setUserTier] = useState("FREE");
   const [error, setError] = useState(null);
   
-  const socketRef = useRef(null);
+  const { socket, joinPreview, leavePreview } = useSocket();
   const isMounted = useRef(true);
   const token = localStorage.getItem("token");
   const navigate = useNavigate();
@@ -144,32 +144,38 @@ export default function Logs({ previewId, onClose }) {
   }, [id, token, navigate, isEmbedded]);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token || !socket) return;
     
     // Use the State tier, not the token tier, to allow live update
     if (!ALLOW_SOCKET_TIERS.includes(userTier)) return;
 
-    const socket = io("http://localhost:4000", { transports: ["websocket"], withCredentials: true });
-    socketRef.current = socket;
+    joinPreview(id);
 
-    socket.on("connect", () => socket.emit("register", { previewId: id, token }));
+    const handleLog = ({ chunk }) => { 
+      if (!isMounted.current) return;
+      setLogs((prev) => prev + chunk.replace(/\r/g, "")); 
+      if (autoScroll) scrollToBottom(); 
+    };
     
-    socket.on("log", ({ chunk }) => { 
-        if (!isMounted.current) return;
-        setLogs((prev) => prev + chunk.replace(/\r/g, "")); 
-        if(autoScroll) scrollToBottom(); 
-    });
+    const handleLogFinish = ({ url }) => {
+      if (isMounted.current) setLogs((prev) => prev + `\n\n=== BUILD FINISHED: ${url} ===\n`);
+    };
     
-    socket.on("log-finish", ({ url }) => {
-       if(isMounted.current) setLogs((prev) => prev + `\n\n=== BUILD FINISHED: ${url} ===\n`);
-    });
-    
-    socket.on("log-error", ({ message }) => {
-       if(isMounted.current) setLogs((prev) => prev + `\n\n=== BUILD ERROR: ${message} ===\n`);
-    });
+    const handleLogError = ({ message }) => {
+      if (isMounted.current) setLogs((prev) => prev + `\n\n=== BUILD ERROR: ${message} ===\n`);
+    };
 
-    return () => socket.disconnect();
-  }, [id, token, autoScroll, userTier]); // Added userTier dependency
+    socket.on("log", handleLog);
+    socket.on("log-finish", handleLogFinish);
+    socket.on("log-error", handleLogError);
+
+    return () => {
+      socket.off("log", handleLog);
+      socket.off("log-finish", handleLogFinish);
+      socket.off("log-error", handleLogError);
+      leavePreview(id);
+    };
+  }, [id, token, autoScroll, userTier, socket, joinPreview, leavePreview]); // Added userTier dependency
 
   const scrollToBottom = () => { if (logContainerRef.current) logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight; };
   useEffect(() => { scrollToBottom(); }, [logs]);

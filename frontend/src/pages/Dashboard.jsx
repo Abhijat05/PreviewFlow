@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from "react";
 import api, { API_BASE_URL } from "../api.js";
-import io from "socket.io-client";
+import { useSocket } from "../context/SocketContext.jsx";
 import { useNavigate } from "react-router-dom";
 import Logs from "./Logs.jsx"; 
 import PlanChangeModal from "../components/PlanChangeModal.jsx"; 
@@ -30,8 +30,6 @@ const getUserTier = (token) => {
     return 'FREE';
   }
 };
-
-const socket = io(API_BASE_URL, { transports: ["websocket"] });
 
 // --- HELPERS ---
 function formatDuration(seconds) { 
@@ -261,6 +259,7 @@ export default function Dashboard() {
 
   const token = localStorage.getItem("token");
   const navigate = useNavigate();
+  const { socket, joinPreview } = useSocket();
 
   const refreshData = async () => {
     if (!token) return;
@@ -306,15 +305,31 @@ export default function Dashboard() {
       }));
     };
 
-    socket.on("preview-status-update", handleStatusUpdate);
-    socket.on("preview-stats-update", handleStatsUpdate);
+    if (socket) {
+      socket.on("preview-status-update", handleStatusUpdate);
+      socket.on("preview-stats-update", handleStatsUpdate);
+    }
     
     return () => {
-      socket.off("preview-status-update", handleStatusUpdate);
-      socket.off("preview-stats-update", handleStatsUpdate);
+      if (socket) {
+        socket.off("preview-status-update", handleStatusUpdate);
+        socket.off("preview-stats-update", handleStatsUpdate);
+      }
       controller.abort();
     };
-  }, [token]);
+  }, [token, socket]);
+
+  // Subscribe to preview rooms for real-time telemetry
+  useEffect(() => {
+    if (!projects.length) return;
+    projects.forEach((proj) => {
+      proj.previews?.forEach((pre) => {
+        if (pre.status === "live" || pre.status === "building") {
+          joinPreview(pre.id);
+        }
+      });
+    });
+  }, [projects, joinPreview]);
 
   const activeBuildsCount = projects.reduce((acc, proj) => 
     acc + proj.previews.filter(p => p.status === 'building').length, 0
