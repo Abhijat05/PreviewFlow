@@ -1,20 +1,19 @@
 import express from "express";
 import crypto from "crypto";
-import axios from "axios"; // needed only if webhook is later allowed in PRO
+import axios from "axios";
 import { prisma } from "../db.js";
 import { requireSubscription, assertRepoQuota } from "../middleware/subscription.js";
 
 const router = express.Router();
 
-// Optional tiers that support auto-deploy
 const WEBHOOK_TIERS = ["PRO", "ENTERPRISE"];
 
-router.post("/connect-repo", requireSubscription, async (req, res) => {
+export async function handleConnectRepo(req, res) {
   try {
-    const { user, tier = "FREE", accessToken } = req.sub; // tier may come from subscription
-    const { repoOwner, repoName } = req.body;
+    const { user, tier = "FREE", accessToken } = req.sub;
+    const { repoOwner, repoName } = req.body || {};
 
-    // 1️⃣ Input validation (prevents injection/parsing bugs)
+    // 1️⃣ Input validation
     if (typeof repoOwner !== "string" || typeof repoName !== "string") {
       return res.status(400).json({ error: "invalid_input_format" });
     }
@@ -23,61 +22,79 @@ router.post("/connect-repo", requireSubscription, async (req, res) => {
       return res.status(400).json({ error: "missing_repo_details" });
     }
 
-    // 2️⃣ Enforce repo quota (rate & subscription guard)
+    // 2️⃣ Enforce repo quota
     try {
       await assertRepoQuota(user);
     } catch (e) {
       return res.status(429).json({ error: e.message, code: e.code });
     }
 
-    // 3️⃣ Prevent container/project name collision (duplicate project protection)
+    // 3️⃣ Duplicate project check
     const existing = await prisma.project.findFirst({
       where: { userId: user.id, repoOwner, repoName }
     });
 
     if (existing) {
-      return res.status(304).json({ success: true, project: existing, note: "already_connected" });
+      return res.status(200).json({ success: true, project: existing, note: "already_connected" });
     }
 
-    // 4️⃣ Generate secrets safely
+    // 4️⃣ Generate webhook secret
     const webhookSecret = crypto.randomBytes(32).toString("hex");
 
-    // 5️⃣ DB write with try/catch safety
+    // 5️⃣ DB write preserving accessToken
     const project = await prisma.project.create({
       data: {
         userId: user.id,
         repoOwner,
         repoName,
-        webhookSecret // ✅ Required field fixed
+        webhookSecret,
+        accessToken: accessToken || null
       }
     });
 
-    // (Optional – only if you add webhook later for PRO tiers)
-    if (WEBHOOK_TIERS.includes(tier.toUpperCase())) {
-      const webhookURL = `${process.env.PUBLIC_WEBHOOK_URL}/webhooks/github`;
+    // 6️⃣ Automatic webhook registration for PRO / ENTERPRISE
+    let webhookCreated = false;
+    if (WEBHOOK_TIERS.includes(tier.toUpperCase()) && accessToken && process.env.PUBLIC_WEBHOOK_URL) {
+      try {
+        const webhookURL = `${process.env.PUBLIC_WEBHOOK_URL.replace(/\/+$/, "")}/webhooks/github`;
 
-      await axios.post(
-        `https://api.github.com/repos/${repoOwner}/${repoName}/hooks`,
-        {
-          name: "web",
-          active: true,
-          events: ["pull_request"],
-          config: {
-            url: webhookURL,
-            content_type: "json",
-            secret: webhookSecret
-          }
-        },
-        { headers: { Authorization: `Bearer ${accessToken}` } }
-      );
+        const hookRes = await axios.post(
+          `https://api.github.com/repos/${repoOwner}/${repoName}/hooks`,
+          {
+            name: "web",
+            active: true,
+            events: ["pull_request"],
+            config: {
+              url: webhookURL,
+              content_type: "json",
+              secret: webhookSecret
+            }
+          },
+          { headers: { Authorization: `Bearer ${accessToken}` } }
+        );
+
+        if (hookRes.data?.id) {
+          const webhookId = String(hookRes.data.id);
+          await prisma.project.update({
+            where: { id: project.id },
+            data: { webhookId }
+          });
+          project.webhookId = webhookId;
+          webhookCreated = true;
+        }
+      } catch (hookErr) {
+        console.warn("Auto webhook creation warning (non-fatal):", hookErr?.response?.data || hookErr.message);
+      }
     }
 
-    return res.json({ success: true, project });
+    return res.json({ success: true, project, webhookCreated });
 
   } catch (err) {
     console.error("connect-repo error:", err);
     return res.status(500).json({ success: false, error: "connection_failed" });
   }
-});
+}
+
+router.post("/connect-repo", requireSubscription, handleConnectRepo);
 
 export default router;

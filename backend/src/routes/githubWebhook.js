@@ -5,7 +5,7 @@ import { handlePROpenOrSync, handlePRClosed } from "../services/prHandlers.js";
 
 const router = express.Router();
 
-router.post("/webhooks/github", async (req, res) => {
+export async function handleGithubWebhook(req, res) {
   try {
     const event = req.header("X-GitHub-Event");
     const signature = req.header("X-Hub-Signature-256");
@@ -16,21 +16,31 @@ router.post("/webhooks/github", async (req, res) => {
     const repoName = payload?.repository?.name;
     if (!repoOwner || !repoName) return res.status(400).send("no repo");
 
-    const project = await prisma.project.findFirst({
+    // Multi-tenant safe project resolution:
+    // Multiple users can connect the same repo or fork.
+    // We fetch all candidate projects for repoOwner & repoName,
+    // and find the one whose webhookSecret matches the HMAC signature!
+    const candidateProjects = await prisma.project.findMany({
       where: { repoOwner, repoName },
       include: { user: true }
     });
-    if (!project) return res.status(404).send("project not registered");
 
-    const ok = verifyGithubSignature(raw, signature, project.webhookSecret);
-    if (!ok) return res.status(401).send("invalid signature");
+    if (!candidateProjects.length) return res.status(404).send("project not registered");
+
+    const project = candidateProjects.find((p) =>
+      verifyGithubSignature(raw, signature, p.webhookSecret)
+    );
+
+    if (!project) return res.status(401).send("invalid signature");
 
     if (event !== "pull_request") return res.status(200).send("ignored");
 
     const action = payload.action;
-    const prNumber = payload.pull_request.number;
-    const headRef = payload.pull_request.head.ref;
-    const headSha = payload.pull_request.head.sha;
+    const prNumber = payload.pull_request?.number;
+    const headRef = payload.pull_request?.head?.ref;
+    const headSha = payload.pull_request?.head?.sha;
+
+    if (!prNumber) return res.status(400).send("missing pr number");
 
     const tier = project.user.tier;
 
@@ -53,12 +63,14 @@ router.post("/webhooks/github", async (req, res) => {
       await handlePRClosed({ project, prNumber });
     }
 
-    res.status(200).send("ok");
+    return res.status(200).send("ok");
 
   } catch (err) {
-    console.error(err);
-    res.status(500).send("error");
+    console.error("github webhook error:", err);
+    return res.status(500).send("error");
   }
-});
+}
+
+router.post("/webhooks/github", handleGithubWebhook);
 
 export default router;
