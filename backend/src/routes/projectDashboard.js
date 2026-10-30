@@ -1,34 +1,24 @@
 import express from "express";
 import { prisma } from "../db.js";
-import jwt from "jsonwebtoken";
+import { requireAuth } from "../middleware/auth.js";
 
 const router = express.Router();
 
-// Middleware: verify auth
-function auth(req, res, next) {
-  const token = req.headers.authorization?.split(" ")[1];
-  if (!token) return res.status(401).json({ error: "Missing token" });
-
+router.get("/projects", requireAuth, async (req, res) => {
   try {
-    const user = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = user;
-    next();
-  } catch (e) {
-    return res.status(401).json({ error: "Invalid token" });
+    const projects = await prisma.project.findMany({
+      where: { userId: req.auth.userId },
+      include: {
+        previews: {
+          orderBy: { prNumber: "desc" },
+        },
+      },
+    });
+
+    res.json(projects);
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to load projects" });
   }
-}
-
-router.get("/projects", auth, async (req, res) => {
-  const projects = await prisma.project.findMany({
-    where: { userId: req.user.userId },
-    include: {
-      previews: {
-        orderBy: { prNumber: "desc" }
-      }
-    }
-  });
-
-  res.json(projects);
 });
 
 export default router;

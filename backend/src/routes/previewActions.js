@@ -1,12 +1,12 @@
 // backend/src/routes/previewActions.js
 import express from "express";
-import jwt from "jsonwebtoken";
 import { prisma } from "../db.js";
 import { cloneRepo } from "../services/repoService.js";
 import { buildPreview, removeContainer } from "../services/dockerService.js";
 import { getIO } from "../socket.js";
 import fs from "fs";
 import { getTierLimits } from "../middleware/tierLimits.js";
+import { requireAuth } from "../middleware/auth.js";
 
 const router = express.Router();
 
@@ -19,19 +19,6 @@ export function emitScopedStatus(previewId, userId, payload) {
       .emit("preview-status-update", payload);
   } catch (err) {
     // socket ignore
-  }
-}
-
-/* ------------------------ AUTH ------------------------ */
-function auth(req, res, next) {
-  const token = req.headers.authorization?.split(" ")[1];
-  if (!token) return res.status(401).json({ error: "Missing token" });
-
-  try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
-    next();
-  } catch (e) {
-    return res.status(401).json({ error: "Invalid token" });
   }
 }
 
@@ -255,7 +242,7 @@ export async function handleDeletePreview(req, res) {
   }
 }
 
-router.post("/preview/:id/rebuild", auth, handleRebuildPreview);
-router.post("/preview/:id/delete", auth, handleDeletePreview);
+router.post("/preview/:id/rebuild", requireAuth, handleRebuildPreview);
+router.post("/preview/:id/delete", requireAuth, handleDeletePreview);
 
 export default router;

@@ -1,45 +1,24 @@
-import jwt from "jsonwebtoken";
 import { prisma } from "../db.js";
+import { requireAuth } from "./auth.js";
+import { getTierLimits } from "./tierLimits.js";
 
 /**
- * Require Authentication & load user + tier into req.sub
+ * Unified authentication & subscription middleware
+ * Maps cleanly to requireAuth to ensure fresh DB tier claims
  */
-export async function requireSubscription(req, res, next) {
-  try {
-    const authHeader = req.headers.authorization || "";
-    const token = authHeader.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
-    if (!token) return res.status(401).json({ error: "Missing token" });
-
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
-
-    const user = await prisma.user.findUnique({
-      where: { id: payload.userId }
-    });
-    if (!user) return res.status(401).json({ error: "User not found" });
-
-    // attach
-    req.sub = { user, userId: user.id, accessToken: payload.accessToken, tier: user.tier };
-
-    next();
-  } catch (err) {
-    console.error("Subscription auth failed:", err);
-    return res.status(401).json({ error: "Invalid token" });
-  }
-}
+export const requireSubscription = requireAuth;
 
 /**
  * Tier-based Repo Connect quota (called inside connect route)
  */
 export async function assertRepoQuota(user) {
-  const tier = user.tier;
-  if (tier === "ENTERPRISE") return true;
-
-  const limits = { FREE: 1, HOBBY: 2, PRO: 10 };
-  const max = limits[tier] ?? 1;
+  const limits = getTierLimits(user?.tier);
+  const max = limits.maxProjects;
+  if (!Number.isFinite(max)) return true;
 
   const count = await prisma.project.count({ where: { userId: user.id } });
   if (count >= max) {
-    const err = new Error("Tier " + tier + " allows max " + max + " connected repos");
+    const err = new Error("Tier " + (user.tier || "FREE") + " allows max " + max + " connected repos");
     err.code = "REPO_QUOTA_EXCEEDED";
     throw err;
   }
@@ -51,18 +30,16 @@ export async function assertRepoQuota(user) {
  * Tier-based Preview quota
  */
 export async function assertPreviewQuota(user) {
-  const tier = user.tier;
-  if (tier === "ENTERPRISE") return true;
-
-  const limits = { FREE: 1, HOBBY: 3, PRO: 10 };
-  const max = limits[tier] ?? 1;
+  const limits = getTierLimits(user?.tier);
+  const max = limits.maxPreviews;
+  if (!Number.isFinite(max)) return true;
 
   const live = await prisma.preview.count({
     where: { project: { userId: user.id }, status: "live" }
   });
 
   if (live >= max) {
-    const err = new Error("Tier " + tier + " allows max " + max + " live previews");
+    const err = new Error("Tier " + (user.tier || "FREE") + " allows max " + max + " live previews");
     err.code = "PREVIEW_QUOTA_EXCEEDED";
     throw err;
   }

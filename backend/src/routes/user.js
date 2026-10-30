@@ -1,25 +1,20 @@
 import express from "express";
-import jwt from "jsonwebtoken";
-import { prisma } from "../db.js";
+import { requireAuth } from "../middleware/auth.js";
 
 const router = express.Router();
 
-router.get("/me", async (req, res) => {
+router.get("/me", requireAuth, async (req, res) => {
   try {
-    const header = req.headers.authorization || "";
-    const token = header.replace("Bearer ", "");
-
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await prisma.user.findUnique({ where: { id: payload.userId }});
-
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    return res.json({ tier: user.tier });
+    const user = req.auth.user;
+    return res.json({
+      tier: user.tier,
+      id: user.id,
+      githubId: user.githubId,
+      username: user.username,
+    });
   } catch (err) {
-    return res.status(401).json({ error: "Invalid token" });
+    return res.status(500).json({ error: err.message || "Failed to load user" });
   }
 });
 
-export default router; 
+export default router;
