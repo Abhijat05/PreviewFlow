@@ -5,6 +5,7 @@ import { spawn, execFile, execFileSync } from "child_process";
 import net from "net";
 import { prisma } from "../db.js";
 import { getIO } from "../socket.js";
+import { resolveProjectConfig } from "./detectProjectType.js";
 
 /**
  * Execute a command safely via spawn without shell expansion, streaming logs
@@ -271,8 +272,12 @@ export async function buildPreview({ project, previewId, repoPath, prNumber }) {
     const safePr = String(prNumber).replace(/[^0-9]/g, "");
     const imageName = `${safeOwner}-${safeRepo}-pr-${safePr}`.toLowerCase();
 
-    // Choose dockerfile template
-    const dockerfile = path.resolve("deploy-templates/vite.Dockerfile");
+    // Detect project framework & configuration dynamically
+    const projectConfig = resolveProjectConfig(repoPath);
+    push(`\n[Detector] Identified project type as: ${projectConfig.type} (Internal Port: ${projectConfig.containerPort})\n`);
+
+    const dockerfile = projectConfig.dockerfile;
+    const containerPort = projectConfig.containerPort;
 
     // Secure build execution via spawn
     const buildArgs = ["build", "-t", imageName, "-f", dockerfile, repoPath];
@@ -289,7 +294,7 @@ export async function buildPreview({ project, previewId, repoPath, prNumber }) {
       "--cpus", "1.0",
       "--security-opt", "no-new-privileges",
       "--cap-drop", "ALL",
-      "-p", `127.0.0.1:${assignedPort}:80`,
+      "-p", `127.0.0.1:${assignedPort}:${containerPort}`,
       imageName
     ];
     push(`\n> docker ${runArgs.join(" ")}\n`);
