@@ -6,6 +6,7 @@ import net from "net";
 import { prisma } from "../db.js";
 import { getIO } from "../socket.js";
 import { resolveProjectConfig } from "./detectProjectType.js";
+import { getPortPoolForTier } from "../middleware/subscription.js";
 
 /**
  * Execute a command safely via spawn without shell expansion, streaming logs
@@ -98,35 +99,63 @@ export async function portReservedInDB(port) {
   return !!existing;
 }
 
+// In-memory set of ports currently being allocated by in-flight processes
+const pendingAllocatedPorts = new Set();
+let allocationMutex = Promise.resolve();
+
+function acquirePortLock() {
+  let release;
+  const nextLock = new Promise((resolve) => {
+    release = resolve;
+  });
+  const currentLock = allocationMutex;
+  allocationMutex = currentLock.then(() => nextLock);
+  return currentLock.then(() => release);
+}
+
+export function reservePortInMemory(port) {
+  pendingAllocatedPorts.add(port);
+}
+
+export function releasePortInMemory(port) {
+  pendingAllocatedPorts.delete(port);
+}
+
+export function getPendingAllocatedPorts() {
+  return Array.from(pendingAllocatedPorts);
+}
+
 /**
  * Find first available port in range [minPort, maxPort].
  * It checks:
+ *  - Mutex lock & pending memory reservation (eliminates TOCTOU race condition between concurrent requests)
  *  - DB (no other preview currently claims it with status != deleted)
  *  - OS binding (port actually free)
- *
- * This function performs sequential checks; because we immediately record
- * the assigned port into the preview record (see build flow), this is
- * reasonably safe for single-instance deployments. For multi-instance,
- * use a central lock (Redis/DB advisory lock).
  */
 export async function findAvailablePort(minPort = 5000, maxPort = 5999) {
-  for (let port = minPort; port <= maxPort; port++) {
-    // Check DB first (cheap)
-    const reserved = await portReservedInDB(port);
-    if (reserved) continue;
+  const unlock = await acquirePortLock();
+  try {
+    for (let port = minPort; port <= maxPort; port++) {
+      if (pendingAllocatedPorts.has(port)) continue;
 
-    // Check OS-level binding
-    /* eslint-disable no-await-in-loop */
-    const free = await isPortFree(port);
-    if (!free) continue;
+      const reserved = await portReservedInDB(port);
+      if (reserved) continue;
 
-    // Port appears free — double-check DB again (race window minimal)
-    const reserved2 = await portReservedInDB(port);
-    if (reserved2) continue;
+      /* eslint-disable no-await-in-loop */
+      const free = await isPortFree(port);
+      if (!free) continue;
 
-    return port;
+      const reserved2 = await portReservedInDB(port);
+      if (reserved2) continue;
+
+      // Mark as pending allocation until database commit completes
+      pendingAllocatedPorts.add(port);
+      return port;
+    }
+    throw new Error(`No free ports available in configured range (${minPort}-${maxPort})`);
+  } finally {
+    unlock();
   }
-  throw new Error("No free ports available in configured range (5000-5999)");
 }
 
 /* ===========================
@@ -235,25 +264,36 @@ export async function buildPreview({ project, previewId, repoPath, prNumber }) {
 
   // Assign or revalidate port
   let assignedPort = preview.port;
+  const pool = getPortPoolForTier(project?.user?.tier);
+  const minPort = pool?.min || 5000;
+  const maxPort = pool?.max || 5999;
 
   try {
     if (!assignedPort) {
-      const freePort = await findAvailablePort(5000, 5999);
+      const freePort = await findAvailablePort(minPort, maxPort);
 
-      await prisma.preview.update({
-        where: { id: previewId },
-        data: { port: freePort }
-      });
+      try {
+        await prisma.preview.update({
+          where: { id: previewId },
+          data: { port: freePort }
+        });
+      } finally {
+        releasePortInMemory(freePort);
+      }
 
       assignedPort = freePort;
     } else {
       const free = await isPortFree(assignedPort);
       if (!free) {
-        const freePort = await findAvailablePort(5000, 5999);
-        await prisma.preview.update({
-          where: { id: previewId },
-          data: { port: freePort }
-        });
+        const freePort = await findAvailablePort(minPort, maxPort);
+        try {
+          await prisma.preview.update({
+            where: { id: previewId },
+            data: { port: freePort }
+          });
+        } finally {
+          releasePortInMemory(freePort);
+        }
         assignedPort = freePort;
       }
     }
