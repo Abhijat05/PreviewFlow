@@ -10,6 +10,24 @@ export function AuthProvider({ children }) {
     const stored = localStorage.getItem("token");
     setToken(stored);
     setLoading(false);
+
+    const handleSyncLogout = () => {
+      setToken(null);
+    };
+
+    const handleStorageChange = (e) => {
+      if (e.key === "token") {
+        setToken(e.newValue);
+      }
+    };
+
+    window.addEventListener("auth:logout", handleSyncLogout);
+    window.addEventListener("storage", handleStorageChange);
+
+    return () => {
+      window.removeEventListener("auth:logout", handleSyncLogout);
+      window.removeEventListener("storage", handleStorageChange);
+    };
   }, []);
 
   const login = (newToken) => {

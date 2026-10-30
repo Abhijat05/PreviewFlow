@@ -20,4 +20,19 @@ api.interceptors.request.use(
   }
 );
 
+// Global response interceptor: auto-logout on expired or revoked token (HTTP 401)
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      localStorage.removeItem("token");
+      window.dispatchEvent(new Event("auth:logout"));
+      if (window.location.pathname !== "/" && !window.location.pathname.startsWith("/auth")) {
+        window.location.href = "/";
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
 export default api;
