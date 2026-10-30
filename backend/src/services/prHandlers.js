@@ -45,33 +45,37 @@ export async function handlePROpenOrSync({ project, prNumber, ref }) {
   });
 
   try {
-    const url = await buildPreview({
-      project,
-      previewId: preview.id,
-      repoPath,
-      prNumber
-    });
+    try {
+      const url = await buildPreview({
+        project,
+        previewId: preview.id,
+        repoPath,
+        prNumber
+      });
 
-    try { fs.rmSync(repoPath, { recursive: true, force: true }); } catch (e) { /* ignore */ }
+      emitStatus(preview.id, project.userId, {
+        previewId: preview.id,
+        projectId: project.id,
+        prNumber,
+        status: "live",
+        url
+      });
+    } catch (err) {
+      emitStatus(preview.id, project.userId, {
+        previewId: preview.id,
+        projectId: project.id,
+        prNumber,
+        status: "error"
+      });
 
-    emitStatus(preview.id, project.userId, {
-      previewId: preview.id,
-      projectId: project.id,
-      prNumber,
-      status: "live",
-      url
-    });
-  } catch (err) {
-    try { fs.rmSync(repoPath, { recursive: true, force: true }); } catch (e) { /* ignore */ }
-
-    emitStatus(preview.id, project.userId, {
-      previewId: preview.id,
-      projectId: project.id,
-      prNumber,
-      status: "error"
-    });
-
-    throw err;
+      throw err;
+    }
+  } finally {
+    try {
+      fs.rmSync(repoPath, { recursive: true, force: true });
+    } catch (e) {
+      // ignore deletion errors
+    }
   }
 }
 

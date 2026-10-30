@@ -90,3 +90,51 @@ export async function cloneRepo({ repoOwner, repoName, ref, prNumber, accessToke
     throw sanitizeGitError(err);
   }
 }
+
+/**
+ * Cleans up orphaned temporary build directories older than maxAgeMs (default: 1 hour).
+ */
+export function cleanupOrphanedBuildDirs(maxAgeMs = 60 * 60 * 1000) {
+  try {
+    const tmpDir = os.tmpdir();
+    const entries = fs.readdirSync(tmpDir);
+    const now = Date.now();
+    let cleanedCount = 0;
+
+    for (const entry of entries) {
+      if (entry.startsWith("pr-build-")) {
+        const fullPath = path.join(tmpDir, entry);
+        try {
+          const stats = fs.statSync(fullPath);
+          if (stats.isDirectory() && now - stats.mtimeMs > maxAgeMs) {
+            fs.rmSync(fullPath, { recursive: true, force: true });
+            cleanedCount++;
+          }
+        } catch {
+          // ignore individual folder access or deletion errors
+        }
+      }
+    }
+    return cleanedCount;
+  } catch (err) {
+    console.error("Orphaned build dir cleanup error:", err.message);
+    return 0;
+  }
+}
+
+/**
+ * Starts periodic cleanup of orphaned build directories.
+ */
+export function startPeriodicDiskCleanup(intervalMs = 60 * 60 * 1000, maxAgeMs = 60 * 60 * 1000) {
+  cleanupOrphanedBuildDirs(maxAgeMs);
+
+  const timer = setInterval(() => {
+    cleanupOrphanedBuildDirs(maxAgeMs);
+  }, intervalMs);
+
+  if (timer.unref) {
+    timer.unref();
+  }
+
+  return timer;
+}

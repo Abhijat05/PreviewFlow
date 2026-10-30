@@ -1,10 +1,12 @@
+import dotenv from "dotenv";
+dotenv.config();
+
 import express from "express";
 import http from "http";
 import cors from "cors";
 import passport from "./auth.js";
 import jwt from "jsonwebtoken";
 import bodyParser from "body-parser";
-import dotenv from "dotenv";
 import morgan from "morgan";
 import { prisma } from "./db.js";
 import { initSocket } from "./socket.js";
@@ -21,15 +23,23 @@ import accountTier from "./routes/accountTier.js";
 import { startStatsWorker } from "./services/statsWorker.js";
 import previewMetricsRoutes from "./routes/previewMetrics.js";
 import devSim from "./routes/devSimulate.js"; // Development simulation routes
-
-dotenv.config();
+import { startPeriodicDiskCleanup } from "./services/repoService.js";
 
 const app = express();
 const server = http.createServer(app);
 
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+const allowedOrigins = Array.from(new Set([FRONTEND_URL, "http://localhost:5173"]));
+
 app.use(
   cors({
-    origin: "http://localhost:5173",
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like curl, mobile, or same-origin)
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(null, false);
+    },
     credentials: true,
   })
 );
@@ -47,6 +57,10 @@ app.use(
 
 app.use(passport.initialize());
 
+// Health check endpoint for uptime monitoring & container orchestrators
+app.get("/health", (req, res) => {
+  res.json({ status: "healthy", timestamp: new Date().toISOString() });
+});
 
 app.get("/auth/github", passport.authenticate("github"));
 
@@ -76,7 +90,7 @@ app.get(
       );
 
       return res.redirect(
-        `http://localhost:5173/auth/success?token=${token}`
+        `${FRONTEND_URL}/auth/success?token=${token}`
       );
     } catch (err) {
       console.error("OAuth callback error:", err);
@@ -84,7 +98,6 @@ app.get(
     }
   }
 );
-
 
 app.use("/api", githubRepos);
 app.use("/api", connectRepo);
@@ -105,6 +118,8 @@ if (process.env.NODE_ENV !== "production") {
 
 initSocket(server);
 startStatsWorker();
+startPeriodicDiskCleanup();
+
 const PORT = process.env.PORT || 4000;
 server.listen(PORT, () => {
   console.log(`Backend running on http://localhost:${PORT}`);
