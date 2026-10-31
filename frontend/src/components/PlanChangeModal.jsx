@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import api from "../api.js";
+import { useAuth } from "../context/AuthContext.jsx";
 import { 
   Check, AlertTriangle, Loader2, X, Shield, ArrowRight, Trash2, Box 
 } from "lucide-react";
@@ -12,23 +13,24 @@ const TIERS = [
 ];
 
 export default function PlanChangeModal({ isOpen, onClose, currentTier, onPlanChanged, showToast }) {
-  const [selectedTier, setSelectedTier] = useState(currentTier);
+  const { login, tier: authTier } = useAuth();
+  const effectiveTier = currentTier || authTier || 'FREE';
+
+  const [selectedTier, setSelectedTier] = useState(effectiveTier);
   const [loading, setLoading] = useState(false);
   const [step, setStep] = useState('SELECT'); // SELECT | CONFIRM
   const [cleanupData, setCleanupData] = useState(null);
-  const [needsCleanupFlag, setNeedsCleanupFlag] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
-      setSelectedTier(currentTier);
+      setSelectedTier(effectiveTier);
       setStep('SELECT');
       setCleanupData(null);
-      setNeedsCleanupFlag(false);
     }
-  }, [isOpen, currentTier]);
+  }, [isOpen, effectiveTier]);
 
   const handleChangePlan = async (confirmCleanup = false) => {
-    if (!selectedTier || selectedTier === currentTier) return;
+    if (!selectedTier || selectedTier === effectiveTier) return;
     
     setLoading(true);
 
@@ -38,26 +40,26 @@ export default function PlanChangeModal({ isOpen, onClose, currentTier, onPlanCh
         confirmCleanup
       });
 
-      const { needsCleanup, changed, willDeleteProjects, willDeletePreviews } = res.data;
+      const { needsCleanup, changed, willDeleteProjects, willDeletePreviews, token: newToken } = res.data;
 
       if (needsCleanup) {
-        setNeedsCleanupFlag(true);
         setCleanupData({ projects: willDeleteProjects, previews: willDeletePreviews });
         setStep('CONFIRM');
-        setLoading(false);
         return;
       }
 
       if (changed) {
-        setNeedsCleanupFlag(false);
-        onPlanChanged(); // Refresh dashboard
-        showToast('Plan changed successfully', 'success');
+        if (newToken) {
+          login(newToken);
+        }
+        onPlanChanged?.(); // Refresh dashboard
+        showToast?.('Plan changed successfully', 'success');
         onClose();
       }
 
     } catch (err) {
       console.error(err);
-      showToast(err.response?.data?.message || 'Something went wrong', 'error');
+      showToast?.(err.response?.data?.message || err.response?.data?.error || 'Something went wrong', 'error');
     } finally {
       setLoading(false);
     }
@@ -86,7 +88,7 @@ export default function PlanChangeModal({ isOpen, onClose, currentTier, onPlanCh
             <div className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {TIERS.map((tier) => {
-                  const isCurrent = currentTier === tier.id;
+                  const isCurrent = effectiveTier === tier.id;
                   const isSelected = selectedTier === tier.id;
                   
                   return (
@@ -127,7 +129,7 @@ export default function PlanChangeModal({ isOpen, onClose, currentTier, onPlanCh
                 <div>
                   <h3 className="text-red-900 font-bold text-sm">Downgrade Confirmation</h3>
                   <p className="text-red-700 text-sm mt-1">
-                    You are downgrading from <span className="font-bold">{currentTier}</span> to <span className="font-bold">{selectedTier}</span>. 
+                    You are downgrading from <span className="font-bold">{effectiveTier}</span> to <span className="font-bold">{selectedTier}</span>. 
                     This exceeds your new plan limits. The following resources will be <span className="underline font-bold">permanently deleted</span>:
                   </p>
                 </div>
@@ -170,7 +172,7 @@ export default function PlanChangeModal({ isOpen, onClose, currentTier, onPlanCh
               <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-black transition-colors">Cancel</button>
               <button 
                 onClick={() => handleChangePlan(false)}
-                disabled={loading || selectedTier === currentTier}
+                disabled={loading || selectedTier === effectiveTier}
                 className="bg-black text-white px-6 py-2 rounded-full text-sm font-semibold hover:bg-gray-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
                 {loading ? <Loader2 size={16} className="animate-spin" /> : <Shield size={16} />}
