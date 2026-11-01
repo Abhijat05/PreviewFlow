@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useState, useMemo } from "react";
+import React, { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import api, { API_BASE_URL } from "../api.js";
+import api from "../api.js";
 import axios from "axios";
 import { useSocket } from "../context/SocketContext.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
@@ -29,19 +29,19 @@ const highlightKeywords = (text) => {
   });
 };
 
-const parseLogLine = (line, index) => {
+const LogLine = React.memo(function LogLine({ line, index }) {
   const cleanLine = line ? line.replace(/\r/g, "").trimEnd() : "";
   if (!cleanLine) return null;
 
   if (cleanLine.startsWith("===") || cleanLine.includes("BUILD FINISHED")) {
-    return <div key={index} className="py-4 mt-2 font-bold text-emerald-400 border-t border-white/10 tracking-wider">{cleanLine}</div>;
+    return <div className="py-4 mt-2 font-bold text-emerald-400 border-t border-white/10 tracking-wider">{cleanLine}</div>;
   }
 
   if (cleanLine.trim().startsWith("#")) {
     const stepMatch = cleanLine.match(/^(#\d+)\s+(.*)/);
     if (stepMatch) {
       return (
-        <div key={index} className="flex gap-3 py-0.5 group hover:bg-white/5 -mx-2 px-2 rounded transition-colors">
+        <div className="flex gap-3 py-0.5 group hover:bg-white/5 -mx-2 px-2 rounded transition-colors">
           <span className="text-blue-500 font-bold min-w-[35px] shrink-0 select-none opacity-80 group-hover:opacity-100">{stepMatch[1]}</span>
           <span className="text-gray-300 break-all whitespace-pre-wrap">{highlightKeywords(stepMatch[2])}</span>
         </div>
@@ -51,7 +51,7 @@ const parseLogLine = (line, index) => {
 
   if (cleanLine.toLowerCase().includes("error") || cleanLine.toLowerCase().includes("failed")) {
     return (
-      <div key={index} className="flex border-l-[3px] border-red-500 bg-red-500/5 pl-4 py-1">
+      <div className="flex border-l-[3px] border-red-500 bg-red-500/5 pl-4 py-1">
         <span className="text-red-400 break-all whitespace-pre-wrap leading-relaxed">{cleanLine}</span>
       </div>
     );
@@ -59,15 +59,19 @@ const parseLogLine = (line, index) => {
 
   if (cleanLine.includes("DONE") || cleanLine.includes("success")) {
     return (
-      <div key={index} className="flex gap-3 text-emerald-400 font-medium py-1">
+      <div className="flex gap-3 text-emerald-400 font-medium py-1">
         <span className="text-blue-500 font-bold min-w-[35px] shrink-0 opacity-50">✓</span>
         <span className="break-all whitespace-pre-wrap">{cleanLine}</span>
       </div>
-    )
+    );
   }
 
-  return <div key={index} className="text-gray-400 break-all whitespace-pre-wrap py-[1px] pl-[47px] hover:text-gray-200 transition-colors">{highlightKeywords(cleanLine)}</div>;
-};
+  return (
+    <div className="text-gray-400 break-all whitespace-pre-wrap py-[1px] pl-[47px] hover:text-gray-200 transition-colors">
+      {highlightKeywords(cleanLine)}
+    </div>
+  );
+});
 
 export default function Logs({ previewId, onClose }) {
   const params = useParams();
@@ -85,18 +89,43 @@ export default function Logs({ previewId, onClose }) {
   const token = localStorage.getItem("token");
   const navigate = useNavigate();
   const logContainerRef = useRef(null);
+  const bufferRef = useRef("");
+  const rafIdRef = useRef(null);
+
+  const scrollToBottom = useCallback(() => {
+    if (logContainerRef.current) {
+      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+    }
+  }, []);
+
+  const appendToLogBuffer = useCallback((chunk) => {
+    if (!chunk) return;
+    bufferRef.current += chunk.replace(/\r/g, "");
+    if (!rafIdRef.current) {
+      rafIdRef.current = requestAnimationFrame(() => {
+        rafIdRef.current = null;
+        if (!isMounted.current) return;
+        const toAppend = bufferRef.current;
+        bufferRef.current = "";
+        if (toAppend) {
+          setLogs((prev) => prev + toAppend);
+        }
+      });
+    }
+  }, []);
 
   useEffect(() => {
     isMounted.current = true;
-    return () => { isMounted.current = false; };
+    return () => {
+      isMounted.current = false;
+      if (rafIdRef.current) {
+        cancelAnimationFrame(rafIdRef.current);
+      }
+    };
   }, []);
 
   useEffect(() => {
     if (!token) { if (!isEmbedded) navigate("/"); return; }
-    
-    // Initial Tier from Token
-    const tier = getUserTier(token);
-    if(isMounted.current) setUserTier(tier);
 
     const controller = new AbortController();
 
@@ -124,30 +153,28 @@ export default function Logs({ previewId, onClose }) {
         }
       });
 
-
     return () => controller.abort();
   }, [id, token, navigate, isEmbedded]);
 
   useEffect(() => {
     if (!token || !socket) return;
     
-    // Use the State tier, not the token tier, to allow live update
+    // Live log streaming gated by tier
     if (!ALLOW_SOCKET_TIERS.includes(userTier)) return;
 
     joinPreview(id);
 
     const handleLog = ({ chunk }) => { 
       if (!isMounted.current) return;
-      setLogs((prev) => prev + chunk.replace(/\r/g, "")); 
-      if (autoScroll) scrollToBottom(); 
+      appendToLogBuffer(chunk);
     };
     
     const handleLogFinish = ({ url }) => {
-      if (isMounted.current) setLogs((prev) => prev + `\n\n=== BUILD FINISHED: ${url} ===\n`);
+      if (isMounted.current) appendToLogBuffer(`\n\n=== BUILD FINISHED: ${url || ''} ===\n`);
     };
     
     const handleLogError = ({ message }) => {
-      if (isMounted.current) setLogs((prev) => prev + `\n\n=== BUILD ERROR: ${message} ===\n`);
+      if (isMounted.current) appendToLogBuffer(`\n\n=== BUILD ERROR: ${message || ''} ===\n`);
     };
 
     socket.on("log", handleLog);
@@ -160,20 +187,26 @@ export default function Logs({ previewId, onClose }) {
       socket.off("log-error", handleLogError);
       leavePreview(id);
     };
-  }, [id, token, autoScroll, userTier, socket, joinPreview, leavePreview]); // Added userTier dependency
+  }, [id, token, userTier, socket, joinPreview, leavePreview, appendToLogBuffer]);
 
-  const scrollToBottom = () => { if (logContainerRef.current) logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight; };
-  useEffect(() => { scrollToBottom(); }, [logs]);
+  useEffect(() => {
+    if (autoScroll) {
+      scrollToBottom();
+    }
+  }, [logs, autoScroll, scrollToBottom]);
 
   const handleScroll = (e) => {
-      const { scrollTop, scrollHeight, clientHeight } = e.target;
-      const isAtBottom = scrollHeight - scrollTop <= clientHeight + 50;
-      setAutoScroll(isAtBottom);
-  }
+    const { scrollTop, scrollHeight, clientHeight } = e.target;
+    const isAtBottom = scrollHeight - scrollTop <= clientHeight + 50;
+    setAutoScroll(isAtBottom);
+  };
 
   const logLines = useMemo(() => {
     try {
-      return logs.split("\n").map((line, index) => parseLogLine(line, index));
+      const splitLines = logs.split("\n");
+      return splitLines.map((line, index) => (
+        <LogLine key={index} line={line} index={index} />
+      ));
     } catch (e) {
       console.error("Log Parsing Error:", e);
       return <div className="text-red-500 p-4">Error parsing logs. Raw output unavailable.</div>;
