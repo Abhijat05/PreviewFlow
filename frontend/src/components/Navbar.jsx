@@ -2,20 +2,20 @@ import React, { useState, useEffect } from "react";
 import { Layout, Menu, X, ArrowRight, BookOpen, Sparkles } from "lucide-react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { API_BASE_URL } from "../api.js"; 
+import { useAuth } from "../context/AuthContext.jsx";
 
 export default function Navbar() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { token } = useAuth();
+  const isLoggedIn = !!token;
   const [isScrolled, setIsScrolled] = useState(false);
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   
   useEffect(() => {
     const handleScroll = () => {
       setIsScrolled(window.scrollY > 20);
     };
-    const token = localStorage.getItem("token");
-    setIsLoggedIn(!!token);
 
     window.addEventListener("scroll", handleScroll);
     return () => window.removeEventListener("scroll", handleScroll);

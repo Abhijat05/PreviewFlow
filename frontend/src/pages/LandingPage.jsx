@@ -11,10 +11,12 @@ import Footer from "../components/Footer.jsx";
 import Toast from "../components/Toast.jsx";
 import { cn } from "../lib/utils.js";
 import { API_BASE_URL } from "../api.js"; 
+import { useAuth } from "../context/AuthContext.jsx";
 
 export default function LandingPage() {
   const navigate = useNavigate();
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const { token } = useAuth();
+  const isLoggedIn = !!token;
   const [heroTab, setHeroTab] = useState("preview"); // "preview" | "terminal"
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [showDocsModal, setShowDocsModal] = useState(false);
@@ -22,11 +24,6 @@ export default function LandingPage() {
   const [contactEmail, setContactEmail] = useState("");
   const [contactMsg, setContactMsg] = useState("");
   const [toast, setToast] = useState(null);
-
-  useEffect(() => {
-    const token = localStorage.getItem("token");
-    setIsLoggedIn(!!token);
-  }, []);
 
   const handlePrimaryAction = () => {
     if (isLoggedIn) {
