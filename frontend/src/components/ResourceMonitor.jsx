@@ -1,3 +1,4 @@
+import React from "react";
 import { Activity, MemoryStick } from "lucide-react";
 import { cn, formatBytesToMB } from "../lib/utils";
 
@@ -74,3 +75,5 @@ export function ResourceMonitor({ stats }) {
     </div>
   );
 }
+
+export default ResourceMonitor;
