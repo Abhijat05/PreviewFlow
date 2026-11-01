@@ -2,18 +2,25 @@ import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { 
   Github, GitPullRequest, Terminal, Globe, Layout, 
-  Zap, ArrowRight, Twitter, Linkedin, ShieldCheck, 
+  Zap, ArrowRight, ShieldCheck, 
   RotateCcw, MessageSquare, BarChart3, ChevronRight, 
-  Loader2, Code2, Box, Lock, Server
+  Loader2, Code2, Box, Lock, Server, Check, Copy, X, ExternalLink, BookOpen, Mail, Sparkles
 } from "lucide-react";
 import Navbar from "../components/Navbar.jsx"; 
 import Footer from "../components/Footer.jsx"; 
+import Toast from "../components/Toast.jsx";
 import { cn } from "../lib/utils.js";
 import { API_BASE_URL } from "../api.js"; 
 
 export default function LandingPage() {
   const navigate = useNavigate();
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [copiedUrl, setCopiedUrl] = useState(false);
+  const [showDocsModal, setShowDocsModal] = useState(false);
+  const [showContactModal, setShowContactModal] = useState(false);
+  const [contactEmail, setContactEmail] = useState("");
+  const [contactMsg, setContactMsg] = useState("");
+  const [toast, setToast] = useState(null);
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -28,6 +35,27 @@ export default function LandingPage() {
     }
   };
 
+  const handleCopyPreviewUrl = () => {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText("https://pr-123.previewflow.app");
+    }
+    setCopiedUrl(true);
+    setToast({ message: "Preview URL copied to clipboard!", type: "success" });
+    setTimeout(() => setCopiedUrl(false), 2000);
+  };
+
+  const handleContactSubmit = (e) => {
+    e.preventDefault();
+    if (!contactEmail) {
+      setToast({ message: "Please provide your email address.", type: "warning" });
+      return;
+    }
+    setShowContactModal(false);
+    setContactEmail("");
+    setContactMsg("");
+    setToast({ message: "Thank you! Our enterprise team will reach out shortly.", type: "success" });
+  };
+
   return (
     <div className="min-h-screen bg-white text-gray-900 font-sans selection:bg-black selection:text-white relative overflow-x-hidden">
       
@@ -38,15 +66,19 @@ export default function LandingPage() {
         {/* --- HERO SECTION --- */}
         <section className="w-full max-w-[1400px] px-6 pt-24 pb-20 text-center relative">
           
-          {/* UPDATED: The "Box Grid" Background (Exact match from Pricing Page) */}
+          {/* The "Box Grid" Background */}
           <div className="absolute inset-0 -z-10 h-full w-full bg-white bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)]"></div>
 
+          {/* Announcement Pill: Live release badge */}
           <div className="animate-in fade-in slide-in-from-bottom-4 duration-700 mb-6 flex justify-center">
-            <div className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white/80 backdrop-blur-sm px-3 py-1 text-xs font-medium text-gray-600 transition-colors hover:border-gray-300 hover:text-black cursor-pointer shadow-sm">
+            <a 
+              href="#workflow"
+              className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white/80 backdrop-blur-sm px-3.5 py-1 text-xs font-medium text-gray-700 transition-all hover:border-gray-300 hover:text-black cursor-pointer shadow-sm group"
+            >
               <span className="flex h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span>Lost some Where</span>
-              <ArrowRight size={10} className="text-gray-400" />
-            </div>
+              <span>PreviewFlow v2.0 is live</span>
+              <ArrowRight size={12} className="text-gray-400 group-hover:translate-x-0.5 transition-transform" />
+            </a>
           </div>
 
           <h1 className="text-5xl md:text-7xl lg:text-8xl font-bold tracking-tighter text-gray-950 mb-6 max-w-5xl mx-auto leading-[0.95] animate-in fade-in slide-in-from-bottom-6 duration-700">
@@ -59,17 +91,32 @@ export default function LandingPage() {
              Review code changes live, instantly.
           </p>
 
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 animate-in fade-in slide-in-from-bottom-10 duration-700 mb-12">
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 animate-in fade-in slide-in-from-bottom-10 duration-700 mb-4">
             <button 
+              type="button"
               onClick={handlePrimaryAction}
               className="h-12 px-8 rounded-full bg-black text-white font-medium text-sm hover:bg-gray-800 transition-all flex items-center gap-2 shadow-lg hover:shadow-xl hover:-translate-y-0.5"
             >
               {isLoggedIn ? <Layout size={18} /> : <Github size={18} />}
               {isLoggedIn ? "Go to Dashboard" : "Connect with GitHub"}
             </button>
-            <button className="h-12 px-8 rounded-full bg-white text-gray-700 border border-gray-200 font-medium text-sm hover:bg-gray-50 hover:text-black transition-all flex items-center gap-2 shadow-sm hover:shadow-md">
+            <button 
+              type="button"
+              onClick={() => setShowDocsModal(true)}
+              className="h-12 px-8 rounded-full bg-white text-gray-700 border border-gray-200 font-medium text-sm hover:bg-gray-50 hover:text-black transition-all flex items-center gap-2 shadow-sm hover:shadow-md"
+            >
+              <BookOpen size={16} />
               Read Documentation
             </button>
+          </div>
+
+          {/* Security & Reassurance Micro-copy */}
+          <div className="flex items-center justify-center gap-3 md:gap-4 text-xs text-gray-500 font-medium mb-12 flex-wrap">
+            <span className="flex items-center gap-1.5"><ShieldCheck size={14} className="text-emerald-600" /> Read-only repo access</span>
+            <span>•</span>
+            <span>Ephemeral sandboxes</span>
+            <span>•</span>
+            <span>No code stored</span>
           </div>
 
           <div className="mb-16 animate-in fade-in slide-in-from-bottom-12 duration-1000">
@@ -106,7 +153,7 @@ export default function LandingPage() {
         </section>
 
         {/* --- WORKFLOW PIPELINE --- */}
-        <section className="w-full bg-gray-50/50 py-32 border-y border-gray-200 relative overflow-hidden">
+        <section id="workflow" className="w-full bg-gray-50/50 py-32 border-y border-gray-200 relative overflow-hidden">
           <div className="absolute top-0 left-0 w-[500px] h-[500px] bg-purple-100/50 rounded-full blur-3xl -translate-x-1/2 -translate-y-1/2 pointer-events-none"></div>
           
           <div className="max-w-6xl mx-auto px-6 relative z-10">
@@ -167,9 +214,19 @@ export default function LandingPage() {
                             PreviewFlow Bot <span className="bg-gray-200 text-gray-600 px-1 rounded text-[8px] font-medium border border-gray-300">Bot</span>
                          </div>
                          <div className="text-gray-600 mb-2 leading-tight">Deployment successful! 🚀 <br/>Preview your changes here:</div>
-                         <div className="bg-white text-blue-600 px-2 py-1.5 rounded border border-blue-100 truncate font-mono shadow-sm cursor-pointer hover:underline">
-                            https://pr-123.previewflow.app
-                         </div>
+                         <button
+                            type="button"
+                            onClick={handleCopyPreviewUrl}
+                            className="w-full text-left bg-white text-blue-600 px-2 py-1.5 rounded border border-blue-100 font-mono shadow-sm cursor-pointer hover:bg-blue-50/50 flex items-center justify-between gap-1 group transition-colors"
+                            title="Click to copy preview URL"
+                         >
+                            <span className="truncate group-hover:underline">https://pr-123.previewflow.app</span>
+                            {copiedUrl ? (
+                              <Check size={12} className="text-emerald-600 shrink-0" />
+                            ) : (
+                              <Copy size={12} className="text-gray-400 group-hover:text-blue-600 shrink-0" />
+                            )}
+                         </button>
                       </div>
                    </div>
                 </div>
@@ -179,7 +236,7 @@ export default function LandingPage() {
         </section>
 
         {/* --- FEATURES GRID --- */}
-        <section className="w-full bg-white border-t border-gray-100 relative z-10">
+        <section id="features" className="w-full bg-white border-t border-gray-100 relative z-10">
           <div className="max-w-7xl mx-auto py-24 px-6">
             <div className="mb-20 md:text-center max-w-3xl mx-auto">
               <h2 className="text-3xl md:text-4xl font-bold tracking-tight text-gray-900 mb-6">Built for modern teams.</h2>
@@ -196,10 +253,19 @@ export default function LandingPage() {
               <h2 className="text-4xl md:text-5xl font-bold text-white mb-6 tracking-tighter">Ready to ship faster?</h2>
               <p className="text-gray-400 text-lg mb-10 max-w-xl mx-auto">Join developers shipping code faster with automated previews. No credit card required.</p>
               <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-                <button onClick={handlePrimaryAction} className="px-8 py-4 bg-white text-black rounded-full font-bold text-sm hover:bg-gray-200 transition-all shadow-[0_0_30px_rgba(255,255,255,0.2)] hover:scale-105 hover:shadow-[0_0_50px_rgba(255,255,255,0.4)]">
+                <button 
+                  type="button"
+                  onClick={handlePrimaryAction} 
+                  className="px-8 py-4 bg-white text-black rounded-full font-bold text-sm hover:bg-gray-200 transition-all shadow-[0_0_30px_rgba(255,255,255,0.2)] hover:scale-105 hover:shadow-[0_0_50px_rgba(255,255,255,0.4)]"
+                >
                   {isLoggedIn ? "Go to Dashboard" : "Start for Free"}
                 </button>
-                <button className="px-8 py-4 bg-transparent border border-white/20 text-white rounded-full font-bold text-sm hover:bg-white/10 transition-all">
+                <button 
+                  type="button"
+                  onClick={() => setShowContactModal(true)} 
+                  className="px-8 py-4 bg-transparent border border-white/20 text-white rounded-full font-bold text-sm hover:bg-white/10 transition-all flex items-center gap-2"
+                >
+                  <Mail size={16} />
                   Contact Sales
                 </button>
               </div>
@@ -209,6 +275,153 @@ export default function LandingPage() {
       </main>
 
       <Footer />
+
+      {/* --- QUICKSTART / DOCS MODAL --- */}
+      {showDocsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-2xl border border-gray-200 relative animate-in zoom-in-95 duration-200">
+            <button 
+              type="button"
+              onClick={() => setShowDocsModal(false)}
+              className="absolute top-4 right-4 p-2 text-gray-400 hover:text-black rounded-full hover:bg-gray-100 transition-colors"
+              aria-label="Close modal"
+            >
+              <X size={18} />
+            </button>
+            <div className="flex items-center gap-2 text-black mb-3 font-bold text-lg">
+              <BookOpen size={20} />
+              Quickstart Documentation
+            </div>
+            <p className="text-sm text-gray-500 mb-5">
+              Follow these three simple steps to enable automatic preview environments on your repository.
+            </p>
+            
+            <div className="space-y-4 mb-6">
+              <div className="p-3.5 bg-gray-50 rounded-xl border border-gray-100">
+                <div className="text-xs font-bold text-gray-900 mb-1 flex items-center gap-2">
+                  <span className="w-5 h-5 rounded-full bg-black text-white inline-flex items-center justify-center text-[10px]">1</span>
+                  Connect Your GitHub Repository
+                </div>
+                <p className="text-xs text-gray-600 pl-7">
+                  Click "Connect with GitHub", authenticate via OAuth, and select which repositories to grant webhook and commit-status access.
+                </p>
+              </div>
+
+              <div className="p-3.5 bg-gray-50 rounded-xl border border-gray-100">
+                <div className="text-xs font-bold text-gray-900 mb-1 flex items-center gap-2">
+                  <span className="w-5 h-5 rounded-full bg-black text-white inline-flex items-center justify-center text-[10px]">2</span>
+                  Configure Build Command
+                </div>
+                <p className="text-xs text-gray-600 pl-7">
+                  PreviewFlow auto-detects Vite, React, Next.js, and static sites. Add optional environment variables directly from your dashboard.
+                </p>
+              </div>
+
+              <div className="p-3.5 bg-gray-50 rounded-xl border border-gray-100">
+                <div className="text-xs font-bold text-gray-900 mb-1 flex items-center gap-2">
+                  <span className="w-5 h-5 rounded-full bg-black text-white inline-flex items-center justify-center text-[10px]">3</span>
+                  Open a Pull Request
+                </div>
+                <p className="text-xs text-gray-600 pl-7">
+                  Every PR push creates an isolated ephemeral build. Our bot posts the live URL directly on your pull request!
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between border-t border-gray-100 pt-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDocsModal(false);
+                  handlePrimaryAction();
+                }}
+                className="px-5 py-2.5 bg-black text-white text-xs font-bold rounded-full hover:bg-gray-800 transition-all flex items-center gap-1.5 shadow-sm"
+              >
+                <Sparkles size={14} /> Get Started Now
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowDocsModal(false)}
+                className="px-4 py-2 text-xs font-medium text-gray-600 hover:text-black"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- CONTACT SALES / ENTERPRISE MODAL --- */}
+      {showContactModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-gray-200 relative animate-in zoom-in-95 duration-200">
+            <button 
+              type="button"
+              onClick={() => setShowContactModal(false)}
+              className="absolute top-4 right-4 p-2 text-gray-400 hover:text-black rounded-full hover:bg-gray-100 transition-colors"
+              aria-label="Close modal"
+            >
+              <X size={18} />
+            </button>
+            <div className="flex items-center gap-2 text-black mb-2 font-bold text-lg">
+              <Mail size={20} />
+              Talk to Our Enterprise Team
+            </div>
+            <p className="text-xs text-gray-500 mb-4">
+              Looking for custom concurrency, self-hosted runners, VPC peering, or dedicated SLAs? Let's discuss your team's needs.
+            </p>
+
+            <form onSubmit={handleContactSubmit} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">Work Email</label>
+                <input 
+                  type="email"
+                  required
+                  value={contactEmail}
+                  onChange={(e) => setContactEmail(e.target.value)}
+                  placeholder="alex@company.com"
+                  className="w-full px-3.5 py-2 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">Tell us about your team</label>
+                <textarea 
+                  rows={3}
+                  value={contactMsg}
+                  onChange={(e) => setContactMsg(e.target.value)}
+                  placeholder="Estimated team size, repositories, or specialized requirements..."
+                  className="w-full px-3.5 py-2 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-black resize-none"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-between">
+                <a 
+                  href="mailto:sales@previewflow.app?subject=PreviewFlow Enterprise Inquiry"
+                  className="text-xs text-blue-600 hover:underline flex items-center gap-1"
+                >
+                  <ExternalLink size={12} /> Email us directly
+                </a>
+                <button
+                  type="submit"
+                  className="px-5 py-2.5 bg-black text-white text-xs font-bold rounded-full hover:bg-gray-800 transition-all shadow-sm"
+                >
+                  Submit Inquiry
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Toast Notification */}
+      {toast && (
+        <Toast 
+          message={toast.message} 
+          type={toast.type} 
+          onClose={() => setToast(null)} 
+        />
+      )}
     </div>
   );
 }
