@@ -182,7 +182,10 @@ export default function LandingPage() {
                    </div>
                 </div>
               </WorkflowCard>
+              
+              {/* Horizontal Chevron for Desktop, Vertical for Mobile */}
               <div className="hidden lg:flex flex-col justify-center text-gray-400"><ChevronRight size={32} strokeWidth={1.5} /></div>
+              <div className="flex lg:hidden justify-center text-gray-400 py-1"><ChevronRight size={24} className="rotate-90" strokeWidth={1.5} /></div>
               
               <WorkflowCard step="02" title="Auto-Build & Deploy" desc="We clone your repo, install dependencies, and build a secluded environment.">
                 <div className="w-full h-32 bg-[#1e1e1e] rounded-lg border border-gray-800 shadow-inner flex flex-col p-3 font-mono text-[10px] overflow-hidden relative">
@@ -195,12 +198,15 @@ export default function LandingPage() {
                       <div className="flex gap-2 text-gray-300"><span className="text-blue-400">➜</span><span>npm install...</span></div>
                       <div className="flex gap-2 text-white"><span className="text-emerald-400">➜</span><span>npm run build</span></div>
                    </div>
-                   <div className="absolute bottom-0 left-0 w-full h-0.5 bg-gray-800">
-                      <div className="h-full bg-emerald-500 w-2/3 animate-[loading_2s_ease-in-out_infinite]"></div>
+                   <div className="absolute bottom-0 left-0 w-full h-0.5 bg-gray-800 overflow-hidden">
+                      <div className="h-full bg-emerald-500 w-1/3 animate-[loading_2s_ease-in-out_infinite]"></div>
                    </div>
                 </div>
               </WorkflowCard>
+              
+              {/* Horizontal Chevron for Desktop, Vertical for Mobile */}
               <div className="hidden lg:flex flex-col justify-center text-gray-400"><ChevronRight size={32} strokeWidth={1.5} /></div>
+              <div className="flex lg:hidden justify-center text-gray-400 py-1"><ChevronRight size={24} className="rotate-90" strokeWidth={1.5} /></div>
 
               <WorkflowCard step="03" title="Preview URL Ready" desc="Our bot comments the live URL directly on your PR. Click to review.">
                 <div className="w-full h-32 bg-white rounded-lg border border-gray-200 shadow-[0_2px_8px_rgba(0,0,0,0.04)] flex flex-col p-4 relative justify-center">
@@ -449,7 +455,7 @@ function FeaturesSectionWithHoverEffects() {
   ];
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 relative z-10 border-l border-t border-gray-200 bg-white shadow-sm">
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 relative z-10 border-t border-l border-gray-200 bg-white shadow-xs rounded-2xl overflow-hidden">
       {features.map((feature, index) => (
         <Feature key={feature.title} {...feature} index={index} />
       ))}
@@ -459,7 +465,7 @@ function FeaturesSectionWithHoverEffects() {
 
 const Feature = ({ title, description, icon }) => {
   return (
-    <div className={cn("flex flex-col lg:border-r py-10 relative group/feature border-b border-gray-200 bg-white hover:bg-gray-50 transition-colors duration-300")}>
+    <div className={cn("flex flex-col border-b border-r border-gray-200 py-10 relative group/feature bg-white hover:bg-gray-50/80 transition-colors duration-300")}>
       <div className="mb-4 relative z-10 px-10 text-gray-600 group-hover/feature:text-black transition-colors">{icon}</div>
       <h3 className="text-lg font-bold mb-2 relative z-10 px-10 text-gray-950">
         <div className="absolute left-0 top-1/2 -translate-y-1/2 h-6 group-hover/feature:h-8 w-1 rounded-tr-full rounded-br-full bg-gray-300 group-hover/feature:bg-black transition-all duration-200" />
