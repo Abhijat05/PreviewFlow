@@ -1,6 +1,5 @@
 import React, { useState } from "react";
 import { Check, X, Zap, Crown, HelpCircle, ArrowRight, Minus } from "lucide-react";
-import { motion } from "framer-motion";
 import Navbar from "../components/Navbar.jsx"; 
 import Footer from "../components/Footer.jsx"; // Imported Footer
 import { AnimatedCounter } from "../components/ui/animated-counter.jsx"; 

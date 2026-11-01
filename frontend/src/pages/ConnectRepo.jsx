@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import axios from "axios";
 import api from "../api.js";
 import { useAuth } from "../context/AuthContext.jsx";
+import Toast from "../components/Toast.jsx";
 import { Github, Search, Loader2, ArrowRight, Layout, ArrowLeft, Lock, Zap, CheckCircle2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -18,6 +19,7 @@ export default function ConnectRepo() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [connectingId, setConnectingId] = useState(null);
+  const [toast, setToast] = useState(null);
   const { tier: userTier } = useAuth();
 
   const navigate = useNavigate();
@@ -47,10 +49,13 @@ export default function ConnectRepo() {
   }, []);
 
   const handleConnect = async (r) => {
-    const limits = TIER_LIMITS[userTier];
+    const currentLimits = TIER_LIMITS[userTier] || TIER_LIMITS.FREE;
 
-    if (existingProjects.length >= limits.projects) {
-      alert(`⚠️ Project Limit Reached!\n\nThe ${userTier} tier allows only ${limits.projects} connected projects.`);
+    if (existingProjects.length >= currentLimits.projects) {
+      setToast({
+        message: `Project Limit Reached! The ${userTier} tier allows only ${currentLimits.projects} connected project${currentLimits.projects > 1 ? 's' : ''}.`,
+        type: "warning"
+      });
       return;
     }
 
@@ -64,16 +69,19 @@ export default function ConnectRepo() {
 
       const projectId = res.data.project.id;
 
-      if (limits.allowWebhook) {
+      if (currentLimits.allowWebhook) {
         await api.post("/api/create-webhook", { projectId });
       }
 
-      alert(`✅ ${r.name} Connected!`);
-      navigate("/dashboard");
+      setToast({ message: `${r.name} connected successfully!`, type: "success" });
+      setTimeout(() => navigate("/dashboard"), 800);
 
     } catch (err) {
       console.error(err);
-      alert("❌ Connection Failed.");
+      setToast({
+        message: err.response?.data?.error || err.response?.data?.message || "Connection failed. Please try again.",
+        type: "error"
+      });
     } finally {
       setConnectingId(null);
     }
@@ -178,6 +186,15 @@ export default function ConnectRepo() {
           </div>
         )}
       </div>
+
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast(null)}
+        />
+      )}
+
       <style>{`.custom-scrollbar::-webkit-scrollbar { width: 6px; } .custom-scrollbar::-webkit-scrollbar-track { background: transparent; } .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #e5e7eb; border-radius: 20px; } .custom-scrollbar::-webkit-scrollbar-thumb:hover { background-color: #d1d5db; }`}</style>
     </div>
   );

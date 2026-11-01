@@ -4,7 +4,9 @@ import { useSocket } from "../context/SocketContext.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useNavigate } from "react-router-dom";
 import Logs from "./Logs.jsx"; 
-import PlanChangeModal from "../components/PlanChangeModal.jsx"; 
+import PlanChangeModal from "../components/PlanChangeModal.jsx";
+import Toast from "../components/Toast.jsx";
+import { formatBytesToMB } from "../lib/utils.js"; 
 
 import {
   GitPullRequest, RefreshCw, Trash2, CheckCircle2, XCircle, Clock, Terminal, Loader2,
@@ -41,10 +43,7 @@ function getStatusVisuals(status) {
   } 
 }
 
-export function formatBytesToMB(bytes) {
-  if (bytes === 0 || !bytes) return 0;
-  return (bytes / (1024 * 1024)).toFixed(0);
-}
+
 
 // --- COMPONENTS ---
 const LiveBuildTimer = ({ startTime }) => {
@@ -57,34 +56,7 @@ const LiveBuildTimer = ({ startTime }) => {
   return <span>{formatDuration(elapsed)}</span>;
 };
 
-const Toast = ({ message, type, onClose }) => {
-  useEffect(() => {
-    const timer = setTimeout(onClose, 4000); 
-    return () => clearTimeout(timer);
-  }, [onClose]);
 
-  const styles = {
-    error: 'bg-red-50 border-red-200 text-red-800',
-    warning: 'bg-amber-50 border-amber-200 text-amber-800',
-    success: 'bg-emerald-50 border-emerald-200 text-emerald-800',
-  };
-
-  const icons = {
-    error: <AlertCircle size={18} />,
-    warning: <AlertTriangle size={18} />,
-    success: <CheckCircle2 size={18} />,
-  };
-
-  return (
-    <div className="fixed bottom-6 right-6 z-50 animate-in slide-in-from-bottom-5 fade-in duration-300">
-      <div className={`flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg border ${styles[type] || styles.warning}`}>
-        {icons[type] || icons.warning}
-        <span className="text-sm font-medium">{message}</span>
-        <button onClick={onClose} className="ml-2 hover:bg-black/5 p-1 rounded-full transition-colors"><X size={14} /></button>
-      </div>
-    </div>
-  );
-};
 
 // Polished Vercel-style Resource Monitor for Dashboard Cards
 const ResourceMonitor = ({ stats, onClick }) => {
@@ -250,7 +222,7 @@ export default function Dashboard() {
   const { socket, joinPreview } = useSocket();
   const { tier: currentTier, refreshUser } = useAuth();
 
-  const refreshData = async () => {
+  const refreshData = useCallback(async () => {
     if (!token) return;
     try {
       const [projRes] = await Promise.all([
@@ -261,7 +233,7 @@ export default function Dashboard() {
     } catch (err) {
       console.error("Failed to refresh data", err);
     }
-  };
+  }, [token, refreshUser]);
 
   useEffect(() => {
     if (!token) return;
@@ -304,7 +276,7 @@ export default function Dashboard() {
       }
       controller.abort();
     };
-  }, [token, socket]);
+  }, [token, socket, refreshData]);
 
   // Subscribe to preview rooms for real-time telemetry
   useEffect(() => {
@@ -332,7 +304,7 @@ export default function Dashboard() {
     setProcessingPreview(pre.id);
     try { await api.post(`/api/preview/${pre.id}/rebuild`, {}); } catch(e) { console.error(e); }
     setProcessingPreview(null);
-  }, [activeBuildsCount, tierConfig, token]);
+  }, [activeBuildsCount, tierConfig]);
 
   const handleDeleteConfirm = useCallback((pre) => setDeleteConfirm(pre), []);
   const handleViewLogs = useCallback((id) => setActiveLogId(id), []);

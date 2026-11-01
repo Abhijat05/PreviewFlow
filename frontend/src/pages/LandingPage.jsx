@@ -244,7 +244,7 @@ function FeaturesSectionWithHoverEffects() {
   );
 }
 
-const Feature = ({ title, description, icon, index }) => {
+const Feature = ({ title, description, icon }) => {
   return (
     <div className={cn("flex flex-col lg:border-r py-10 relative group/feature border-b border-gray-200 bg-white hover:bg-gray-50 transition-colors duration-300")}>
       <div className="mb-4 relative z-10 px-10 text-gray-600 group-hover/feature:text-black transition-colors">{icon}</div>

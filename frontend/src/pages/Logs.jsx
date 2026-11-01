@@ -29,7 +29,7 @@ const highlightKeywords = (text) => {
   });
 };
 
-const LogLine = React.memo(function LogLine({ line, index }) {
+const LogLine = React.memo(function LogLine({ line }) {
   const cleanLine = line ? line.replace(/\r/g, "").trimEnd() : "";
   if (!cleanLine) return null;
 
