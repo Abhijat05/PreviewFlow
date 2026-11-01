@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { motion } from "framer-motion";
 import { Check, X, Zap, Crown, HelpCircle, ArrowRight, Minus } from "lucide-react";
 import Navbar from "../components/Navbar.jsx"; 
 import Footer from "../components/Footer.jsx"; // Imported Footer
@@ -193,7 +194,7 @@ function PricingCard({ title, price, period, description, features, cta, ctaStyl
       
       <div className="mb-6">
         <div className="flex items-center gap-2 mb-3">
-           {icon && <div className={`p-1.5 rounded-md ${highlight ? 'bg-blue-600' : 'bg-neutral-100 text-neutral-600'}`}>{icon}</div>}
+           {icon && <div className={`p-1.5 rounded-md ${highlight ? 'bg-blue-600 text-white' : 'bg-neutral-100 text-neutral-600'}`}>{icon}</div>}
            <h3 className="text-xl font-bold text-neutral-900 tracking-tight">{title}</h3>
         </div>
         <p className="text-sm text-neutral-500 font-medium leading-relaxed min-h-[40px]">{description}</p>
