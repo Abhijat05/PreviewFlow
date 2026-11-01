@@ -4,7 +4,7 @@ import {
   Github, GitPullRequest, Terminal, Globe, Layout, 
   Zap, ArrowRight, ShieldCheck, 
   RotateCcw, MessageSquare, BarChart3, ChevronRight, 
-  Loader2, Code2, Box, Lock, Server, Check, Copy, X, ExternalLink, BookOpen, Mail, Sparkles
+  Loader2, Code2, Box, Lock, Server, Check, Copy, X, ExternalLink, BookOpen, Mail, Sparkles, CheckCircle2, ThumbsUp
 } from "lucide-react";
 import Navbar from "../components/Navbar.jsx"; 
 import Footer from "../components/Footer.jsx"; 
@@ -15,6 +15,7 @@ import { API_BASE_URL } from "../api.js";
 export default function LandingPage() {
   const navigate = useNavigate();
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [heroTab, setHeroTab] = useState("preview"); // "preview" | "terminal"
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [showDocsModal, setShowDocsModal] = useState(false);
   const [showContactModal, setShowContactModal] = useState(false);
@@ -130,23 +131,61 @@ export default function LandingPage() {
              </div>
           </div>
 
+          {/* --- HERO INTERACTIVE SHOWCASE (Live Preview + Realtime Logs) --- */}
           <div className="relative mx-auto max-w-5xl animate-in fade-in zoom-in-95 duration-1000 delay-200 group">
             <div className="absolute -inset-1 bg-gradient-to-r from-blue-500/20 via-purple-500/20 to-pink-500/20 rounded-2xl blur-xl opacity-50 group-hover:opacity-100 transition duration-1000"></div>
             
             <div className="relative rounded-xl border border-gray-200 bg-[#0a0a0a] shadow-2xl overflow-hidden ring-1 ring-white/10 text-left">
-              <div className="bg-[#0a0a0a] border-b border-white/10 px-4 py-3 flex items-center justify-between">
-                <div className="flex gap-2">
-                  <div className="w-3 h-3 rounded-full bg-[#FF5F56]"></div>
-                  <div className="w-3 h-3 rounded-full bg-[#FFBD2E]"></div>
-                  <div className="w-3 h-3 rounded-full bg-[#27C93F]"></div>
+              {/* Showcase Window Chrome with Tabs */}
+              <div className="bg-[#111111] border-b border-white/10 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex gap-2">
+                    <div className="w-3 h-3 rounded-full bg-[#FF5F56]"></div>
+                    <div className="w-3 h-3 rounded-full bg-[#FFBD2E]"></div>
+                    <div className="w-3 h-3 rounded-full bg-[#27C93F]"></div>
+                  </div>
+                  <div className="hidden sm:flex items-center gap-1.5 text-[11px] text-gray-400 font-mono pl-2 border-l border-white/10">
+                    <Lock size={10} className="text-emerald-400" />
+                    <span>pr-123.previewflow.app</span>
+                  </div>
                 </div>
-                <div className="text-[11px] text-gray-400 font-mono flex items-center gap-2">
-                   <Lock size={10} /> previewflow-build-logs
+
+                {/* View Switcher Tabs */}
+                <div className="flex items-center gap-1 bg-white/10 p-1 rounded-lg">
+                  <button
+                    type="button"
+                    onClick={() => setHeroTab("preview")}
+                    className={`px-3 py-1 rounded text-xs font-medium transition-all flex items-center gap-1.5 ${
+                      heroTab === "preview" 
+                        ? "bg-white text-black font-semibold shadow-xs" 
+                        : "text-gray-400 hover:text-white"
+                    }`}
+                  >
+                    <Globe size={13} />
+                    <span>Live Preview</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setHeroTab("terminal")}
+                    className={`px-3 py-1 rounded text-xs font-medium transition-all flex items-center gap-1.5 ${
+                      heroTab === "terminal" 
+                        ? "bg-white text-black font-semibold shadow-xs" 
+                        : "text-gray-400 hover:text-white"
+                    }`}
+                  >
+                    <Terminal size={13} />
+                    <span>Build Logs</span>
+                  </button>
                 </div>
-                <div className="w-12"></div>
               </div>
+
+              {/* Showcase Body */}
               <div className="p-0">
-                 <TerminalSimulation />
+                {heroTab === "preview" ? (
+                  <InteractivePreviewMockup onCopy={handleCopyPreviewUrl} copied={copiedUrl} />
+                ) : (
+                  <TerminalSimulation />
+                )}
               </div>
             </div>
           </div>
@@ -489,11 +528,110 @@ function WorkflowCard({ step, title, desc, children }) {
   );
 }
 
+function InteractivePreviewMockup({ onCopy, copied }) {
+  const [approved, setApproved] = useState(false);
+
+  return (
+    <div className="bg-[#0f1117] text-white p-4 md:p-6 font-sans">
+      {/* Floating Preview Toolbar */}
+      <div className="bg-[#1a1d26] border border-white/10 rounded-xl p-3 mb-4 flex flex-wrap items-center justify-between gap-3 shadow-md">
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-2 w-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span className="text-xs font-mono font-semibold text-emerald-400">LIVE PREVIEW</span>
+          <span className="text-gray-500">•</span>
+          <span className="text-xs text-gray-300 font-mono">PR #123 (feat/dashboard-ui)</span>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onCopy}
+            className="px-2.5 py-1 text-xs bg-white/10 hover:bg-white/20 text-gray-200 rounded-md font-mono flex items-center gap-1.5 transition-colors"
+          >
+            {copied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+            <span>{copied ? "Copied" : "Share URL"}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setApproved(!approved)}
+            className={`px-3 py-1 text-xs rounded-md font-medium flex items-center gap-1.5 transition-colors ${
+              approved 
+                ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40" 
+                : "bg-emerald-600 hover:bg-emerald-500 text-white"
+            }`}
+          >
+            <ThumbsUp size={12} />
+            <span>{approved ? "Approved ✓" : "Approve PR"}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Rendered Live App Simulation Canvas */}
+      <div className="bg-white text-gray-900 rounded-xl p-6 border border-gray-200/20 shadow-inner">
+        <div className="flex items-center justify-between border-b border-gray-100 pb-4 mb-5">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-black text-white flex items-center justify-center font-bold text-xs">
+              PF
+            </div>
+            <div>
+              <div className="text-xs font-bold text-gray-900">Analytics Preview Environment</div>
+              <div className="text-[10px] text-gray-500">Commit <span className="font-mono text-gray-700">a1b2c3d</span> • Built in 4.2s</div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-bold border border-emerald-200 flex items-center gap-1">
+              <CheckCircle2 size={10} /> 100% Healthy
+            </span>
+            <span className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 text-[10px] font-mono">
+              28ms Edge Latency
+            </span>
+          </div>
+        </div>
+
+        {/* Dashboard Mock Widgets */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+          <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+            <div className="text-[10px] uppercase font-bold text-gray-600">Active Build Runners</div>
+            <div className="text-xl font-bold text-gray-900 mt-1">12 / 12</div>
+            <div className="text-[10px] text-emerald-700 mt-0.5 font-medium">Optimal Concurrency</div>
+          </div>
+          <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+            <div className="text-[10px] uppercase font-bold text-gray-600">Avg Preview Build Time</div>
+            <div className="text-xl font-bold text-gray-900 mt-1">3.8s</div>
+            <div className="text-[10px] text-emerald-700 mt-0.5 font-medium">↓ 68% from cache</div>
+          </div>
+          <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+            <div className="text-[10px] uppercase font-bold text-gray-600">Team Reviewers Active</div>
+            <div className="text-xl font-bold text-gray-900 mt-1">8 Engineers</div>
+            <div className="text-[10px] text-blue-700 mt-0.5 font-medium">2 pending comments</div>
+          </div>
+        </div>
+
+        <div className="p-3 bg-emerald-50/70 rounded-lg border border-emerald-200/80 flex items-center justify-between text-xs text-emerald-900">
+          <span className="flex items-center gap-2">
+            <Sparkles size={14} className="text-emerald-700" />
+            <span className="font-medium">Everything works exactly like staging—with zero server provisioning.</span>
+          </span>
+          <span className="text-[11px] font-mono text-emerald-800">pr-123.previewflow.app</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TerminalSimulation() {
+  const [key, setKey] = useState(0);
   const [lines, setLines] = useState([
     { text: "git push origin feature/dashboard", color: "text-white" },
   ]);
+  const [isReplaying, setIsReplaying] = useState(false);
   const scrollRef = useRef(null); 
+
+  const handleReplay = () => {
+    setIsReplaying(true);
+    setLines([{ text: "git push origin feature/dashboard", color: "text-white" }]);
+    setKey(prev => prev + 1);
+  };
 
   useEffect(() => {
     const sequence = [
@@ -512,8 +650,15 @@ function TerminalSimulation() {
       }, item.delay));
     });
 
-    return () => timeouts.forEach(clearTimeout);
-  }, []);
+    const resetTimer = setTimeout(() => {
+      setIsReplaying(false);
+    }, 4800);
+
+    return () => {
+      timeouts.forEach(clearTimeout);
+      clearTimeout(resetTimer);
+    };
+  }, [key]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -522,19 +667,33 @@ function TerminalSimulation() {
   }, [lines]);
 
   return (
-    <div 
-      ref={scrollRef}
-      className="font-mono text-xs md:text-[13px] p-6 space-y-2.5 h-[300px] flex flex-col justify-start text-left font-medium overflow-y-auto scrollbar-hide scroll-smooth"
-    >
-      {lines.map((line, i) => (
-        <div key={i} className={`${line.color} animate-in fade-in slide-in-from-left-2 duration-300 flex gap-3 shrink-0`}>
-          {i === 0 && <span className="text-emerald-500 font-bold">➜</span>}
-          <span>{line.text}</span>
+    <div className="relative">
+      <div className="absolute top-3 right-4 z-10">
+        <button
+          type="button"
+          onClick={handleReplay}
+          className="text-xs text-gray-300 hover:text-white flex items-center gap-1.5 px-2.5 py-1 rounded bg-white/10 hover:bg-white/20 transition-colors border border-white/10 cursor-pointer shadow-sm"
+          title="Replay build simulation"
+        >
+          <RotateCcw size={11} className={isReplaying ? "animate-spin" : ""} />
+          <span>{isReplaying ? "Running..." : "Replay"}</span>
+        </button>
+      </div>
+
+      <div 
+        ref={scrollRef}
+        className="font-mono text-xs md:text-[13px] p-6 space-y-2.5 h-[300px] flex flex-col justify-start text-left font-medium overflow-y-auto scrollbar-hide scroll-smooth"
+      >
+        {lines.map((line, i) => (
+          <div key={i} className={`${line.color} animate-in fade-in slide-in-from-left-2 duration-300 flex gap-3 shrink-0`}>
+            {i === 0 && <span className="text-emerald-500 font-bold">➜</span>}
+            <span>{line.text}</span>
+          </div>
+        ))}
+        <div className="flex items-center gap-2 text-gray-400 animate-pulse mt-1 shrink-0">
+          <span className="text-emerald-500 font-bold">➜</span>
+          <span className="w-2.5 h-5 bg-gray-500"></span>
         </div>
-      ))}
-      <div className="flex items-center gap-2 text-gray-400 animate-pulse mt-1 shrink-0">
-        <span className="text-emerald-500 font-bold">➜</span>
-        <span className="w-2.5 h-5 bg-gray-500"></span>
       </div>
     </div>
   );
