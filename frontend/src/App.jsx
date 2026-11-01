@@ -2,10 +2,10 @@ import React, { lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 
 import AuthSuccess from "./pages/AuthSuccess.jsx";
+import LandingPage from "./pages/LandingPage.jsx";
 import { useAuth } from "./context/AuthContext.jsx";
 
 // Route-level code-splitting with React.lazy
-const LandingPage = lazy(() => import("./pages/LandingPage.jsx"));
 const Dashboard = lazy(() => import("./pages/Dashboard.jsx"));
 const ConnectRepo = lazy(() => import("./pages/ConnectRepo.jsx"));
 const Logs = lazy(() => import("./pages/Logs.jsx"));

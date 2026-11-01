@@ -484,7 +484,7 @@ const TERMINAL_SEQUENCE = [
   { text: "→ Deployment URL: https://previewflow-pr-123.app", color: "text-blue-400 underline decoration-blue-400/30" },
 ];
 
-function TerminalSimulation() {
+const TerminalSimulation = React.memo(function TerminalSimulation() {
   const [visibleCount, setVisibleCount] = useState(1);
   const [isReplaying, setIsReplaying] = useState(false);
   const scrollRef = useRef(null);
@@ -553,4 +553,4 @@ function TerminalSimulation() {
       </div>
     </div>
   );
-}
+});
