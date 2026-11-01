@@ -88,32 +88,35 @@ export default function LandingPage() {
              Review code changes live, instantly.
           </p>
 
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 animate-in fade-in slide-in-from-bottom-10 duration-700 mb-4">
-            <button 
-              type="button"
-              onClick={handlePrimaryAction}
-              className="h-12 px-8 rounded-full bg-black text-white font-medium text-sm hover:bg-gray-800 transition-all flex items-center gap-2 shadow-lg hover:shadow-xl hover:-translate-y-0.5"
-            >
-              {isLoggedIn ? <Layout size={18} /> : <Github size={18} />}
-              {isLoggedIn ? "Go to Dashboard" : "Connect with GitHub"}
-            </button>
-            <button 
-              type="button"
-              onClick={() => setShowDocsModal(true)}
-              className="h-12 px-8 rounded-full bg-white text-gray-700 border border-gray-200 font-medium text-sm hover:bg-gray-50 hover:text-black transition-all flex items-center gap-2 shadow-sm hover:shadow-md"
-            >
-              <BookOpen size={16} />
-              Read Documentation
-            </button>
-          </div>
+          {/* --- CTA BUTTONS & SECURITY MICRO-COPY --- */}
+          <div className="animate-in fade-in slide-in-from-bottom-10 duration-700 mb-12">
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-4">
+              <button 
+                type="button"
+                onClick={handlePrimaryAction}
+                className="h-12 px-8 rounded-full bg-black text-white font-medium text-sm hover:bg-gray-800 transition-all flex items-center gap-2 shadow-lg hover:shadow-xl hover:-translate-y-0.5"
+              >
+                {isLoggedIn ? <Layout size={18} /> : <Github size={18} />}
+                {isLoggedIn ? "Go to Dashboard" : "Connect with GitHub"}
+              </button>
+              <button 
+                type="button"
+                onClick={() => setShowDocsModal(true)}
+                className="h-12 px-8 rounded-full bg-white text-gray-700 border border-gray-200 font-medium text-sm hover:bg-gray-50 hover:text-black transition-all flex items-center gap-2 shadow-sm hover:shadow-md"
+              >
+                <BookOpen size={16} />
+                Read Documentation
+              </button>
+            </div>
 
-          {/* Security & Reassurance Micro-copy */}
-          <div className="flex items-center justify-center gap-3 md:gap-4 text-xs text-gray-600 font-medium mb-12 flex-wrap">
-            <span className="flex items-center gap-1.5"><ShieldCheck size={14} className="text-emerald-600" /> Read-only repo access</span>
-            <span>•</span>
-            <span>Ephemeral sandboxes</span>
-            <span>•</span>
-            <span>No code stored</span>
+            {/* Security & Reassurance Micro-copy */}
+            <div className="flex items-center justify-center gap-3 md:gap-4 text-xs text-gray-600 font-medium flex-wrap">
+              <span className="flex items-center gap-1.5"><ShieldCheck size={14} className="text-emerald-600" /> Read-only repo access</span>
+              <span>•</span>
+              <span>Ephemeral sandboxes</span>
+              <span>•</span>
+              <span>No code stored</span>
+            </div>
           </div>
 
           <div className="mb-16 animate-in fade-in slide-in-from-bottom-12 duration-1000">
