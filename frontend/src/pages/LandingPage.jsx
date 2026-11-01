@@ -83,10 +83,10 @@ export default function LandingPage() {
 
           <h1 className="text-5xl md:text-7xl lg:text-8xl font-bold tracking-tighter text-gray-950 mb-6 max-w-5xl mx-auto leading-[0.95] animate-in fade-in slide-in-from-bottom-6 duration-700">
             Automated previews <br className="hidden md:block" />
-            for every <span className="text-gray-400">Pull Request.</span>
+            for every <span className="text-gray-500">Pull Request.</span>
           </h1>
 
-          <p className="text-lg md:text-xl text-gray-500 max-w-2xl mx-auto mb-8 leading-relaxed font-medium animate-in fade-in slide-in-from-bottom-8 duration-700">
+          <p className="text-lg md:text-xl text-gray-600 max-w-2xl mx-auto mb-8 leading-relaxed font-normal animate-in fade-in slide-in-from-bottom-8 duration-700">
              Stop waiting for staging. PreviewFlow automatically builds and deploys your PRs to a unique URL. 
              Review code changes live, instantly.
           </p>
@@ -111,7 +111,7 @@ export default function LandingPage() {
           </div>
 
           {/* Security & Reassurance Micro-copy */}
-          <div className="flex items-center justify-center gap-3 md:gap-4 text-xs text-gray-500 font-medium mb-12 flex-wrap">
+          <div className="flex items-center justify-center gap-3 md:gap-4 text-xs text-gray-600 font-medium mb-12 flex-wrap">
             <span className="flex items-center gap-1.5"><ShieldCheck size={14} className="text-emerald-600" /> Read-only repo access</span>
             <span>•</span>
             <span>Ephemeral sandboxes</span>
@@ -120,8 +120,8 @@ export default function LandingPage() {
           </div>
 
           <div className="mb-16 animate-in fade-in slide-in-from-bottom-12 duration-1000">
-             <p className="text-xs font-semibold text-gray-400 mb-6 uppercase tracking-widest">Works seamlessly with</p>
-             <div className="flex flex-wrap justify-center gap-8 md:gap-16 opacity-60 grayscale hover:grayscale-0 transition-all duration-500">
+             <p className="text-xs font-bold text-gray-600 mb-6 uppercase tracking-widest">Works seamlessly with</p>
+             <div className="flex flex-wrap justify-center gap-8 md:gap-16 opacity-85 hover:opacity-100 transition-opacity duration-300">
                 <TechBadge icon={<Github size={20}/>} label="GitHub" />
                 <TechBadge icon={<Zap size={20}/>} label="Vite" />
                 <TechBadge icon={<Code2 size={20}/>} label="React" />
@@ -140,7 +140,7 @@ export default function LandingPage() {
                   <div className="w-3 h-3 rounded-full bg-[#FFBD2E]"></div>
                   <div className="w-3 h-3 rounded-full bg-[#27C93F]"></div>
                 </div>
-                <div className="text-[11px] text-gray-500 font-mono flex items-center gap-2">
+                <div className="text-[11px] text-gray-400 font-mono flex items-center gap-2">
                    <Lock size={10} /> previewflow-build-logs
                 </div>
                 <div className="w-12"></div>
@@ -159,7 +159,7 @@ export default function LandingPage() {
           <div className="max-w-6xl mx-auto px-6 relative z-10">
             <div className="text-center mb-20">
                 <h2 className="text-3xl md:text-4xl font-bold tracking-tight text-gray-900 mb-4">How it works</h2>
-                <p className="text-gray-500 text-lg">From your terminal to a live URL, completely automated.</p>
+                <p className="text-gray-600 text-lg">From your terminal to a live URL, completely automated.</p>
             </div>
             
             <div className="flex flex-col lg:flex-row items-stretch justify-center gap-6 relative">
@@ -174,33 +174,33 @@ export default function LandingPage() {
                    <div className="p-4 flex flex-col gap-2.5">
                       <div className="h-2 w-3/4 bg-gray-200 rounded animate-pulse"></div>
                       <div className="h-2 w-1/2 bg-gray-100 rounded"></div>
-                      <div className="flex items-center gap-2 text-[10px] text-gray-500 font-mono mt-2">
-                         <span className="bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded border border-blue-100">feat/dashboard-ui</span>
+                      <div className="flex items-center gap-2 text-[10px] text-gray-600 font-mono mt-2">
+                         <span className="bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded border border-blue-100">feat/dashboard-ui</span>
                          <ArrowRight size={8} />
-                         <span className="bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded border border-gray-200">main</span>
+                         <span className="bg-gray-100 text-gray-700 px-1.5 py-0.5 rounded border border-gray-200">main</span>
                       </div>
                    </div>
                 </div>
               </WorkflowCard>
-              <div className="hidden lg:flex flex-col justify-center text-gray-300"><ChevronRight size={32} strokeWidth={1.5} /></div>
+              <div className="hidden lg:flex flex-col justify-center text-gray-400"><ChevronRight size={32} strokeWidth={1.5} /></div>
               
               <WorkflowCard step="02" title="Auto-Build & Deploy" desc="We clone your repo, install dependencies, and build a secluded environment.">
                 <div className="w-full h-32 bg-[#1e1e1e] rounded-lg border border-gray-800 shadow-inner flex flex-col p-3 font-mono text-[10px] overflow-hidden relative">
-                   <div className="text-gray-500 mb-2 flex justify-between border-b border-gray-700/50 pb-1">
+                   <div className="text-gray-400 mb-2 flex justify-between border-b border-gray-700/50 pb-1 font-mono text-[11px]">
                       <span>Build #841</span>
-                      <span className="text-emerald-400 flex items-center gap-1"><Loader2 size={8} className="animate-spin"/> Running</span>
+                      <span className="text-emerald-400 flex items-center gap-1"><Loader2 size={10} className="animate-spin"/> Running</span>
                    </div>
                    <div className="space-y-1.5 opacity-90">
-                      <div className="flex gap-2 text-gray-400"><span className="text-blue-500">➜</span><span>git clone repo...</span></div>
-                      <div className="flex gap-2 text-gray-400"><span className="text-blue-500">➜</span><span>npm install...</span></div>
-                      <div className="flex gap-2 text-white"><span className="text-emerald-500">➜</span><span>npm run build</span></div>
+                      <div className="flex gap-2 text-gray-300"><span className="text-blue-400">➜</span><span>git clone repo...</span></div>
+                      <div className="flex gap-2 text-gray-300"><span className="text-blue-400">➜</span><span>npm install...</span></div>
+                      <div className="flex gap-2 text-white"><span className="text-emerald-400">➜</span><span>npm run build</span></div>
                    </div>
                    <div className="absolute bottom-0 left-0 w-full h-0.5 bg-gray-800">
                       <div className="h-full bg-emerald-500 w-2/3 animate-[loading_2s_ease-in-out_infinite]"></div>
                    </div>
                 </div>
               </WorkflowCard>
-              <div className="hidden lg:flex flex-col justify-center text-gray-300"><ChevronRight size={32} strokeWidth={1.5} /></div>
+              <div className="hidden lg:flex flex-col justify-center text-gray-400"><ChevronRight size={32} strokeWidth={1.5} /></div>
 
               <WorkflowCard step="03" title="Preview URL Ready" desc="Our bot comments the live URL directly on your PR. Click to review.">
                 <div className="w-full h-32 bg-white rounded-lg border border-gray-200 shadow-[0_2px_8px_rgba(0,0,0,0.04)] flex flex-col p-4 relative justify-center">
@@ -211,9 +211,9 @@ export default function LandingPage() {
                       <div className="flex-1 bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-[10px] relative">
                          <div className="absolute top-3 -left-1.5 w-3 h-3 bg-gray-50 border-l border-b border-gray-200 transform rotate-45"></div>
                          <div className="font-bold text-gray-900 mb-1 flex items-center justify-between">
-                            PreviewFlow Bot <span className="bg-gray-200 text-gray-600 px-1 rounded text-[8px] font-medium border border-gray-300">Bot</span>
+                            PreviewFlow Bot <span className="bg-gray-100 text-gray-700 px-1.5 py-0.5 rounded text-[10px] font-semibold border border-gray-300">Bot</span>
                          </div>
-                         <div className="text-gray-600 mb-2 leading-tight">Deployment successful! 🚀 <br/>Preview your changes here:</div>
+                         <div className="text-gray-700 mb-2 leading-tight">Deployment successful! 🚀 <br/>Preview your changes here:</div>
                          <button
                             type="button"
                             onClick={handleCopyPreviewUrl}
@@ -240,7 +240,7 @@ export default function LandingPage() {
           <div className="max-w-7xl mx-auto py-24 px-6">
             <div className="mb-20 md:text-center max-w-3xl mx-auto">
               <h2 className="text-3xl md:text-4xl font-bold tracking-tight text-gray-900 mb-6">Built for modern teams.</h2>
-              <p className="text-gray-500 text-lg leading-relaxed">Everything you need to manage preview deployments at scale.</p>
+              <p className="text-gray-600 text-lg leading-relaxed">Everything you need to manage preview deployments at scale.</p>
             </div>
             <FeaturesSectionWithHoverEffects />
           </div>
@@ -251,7 +251,7 @@ export default function LandingPage() {
            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-white/10 rounded-full blur-[100px] pointer-events-none"></div>
            <div className="max-w-4xl mx-auto text-center relative z-10">
               <h2 className="text-4xl md:text-5xl font-bold text-white mb-6 tracking-tighter">Ready to ship faster?</h2>
-              <p className="text-gray-400 text-lg mb-10 max-w-xl mx-auto">Join developers shipping code faster with automated previews. No credit card required.</p>
+              <p className="text-gray-300 text-lg mb-10 max-w-xl mx-auto">Join developers shipping code faster with automated previews. No credit card required.</p>
               <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
                 <button 
                   type="button"
@@ -292,7 +292,7 @@ export default function LandingPage() {
               <BookOpen size={20} />
               Quickstart Documentation
             </div>
-            <p className="text-sm text-gray-500 mb-5">
+            <p className="text-sm text-gray-600 mb-5">
               Follow these three simple steps to enable automatic preview environments on your repository.
             </p>
             
@@ -367,7 +367,7 @@ export default function LandingPage() {
               <Mail size={20} />
               Talk to Our Enterprise Team
             </div>
-            <p className="text-xs text-gray-500 mb-4">
+            <p className="text-xs text-gray-600 mb-4">
               Looking for custom concurrency, self-hosted runners, VPC peering, or dedicated SLAs? Let's discuss your team's needs.
             </p>
 
@@ -461,11 +461,11 @@ const Feature = ({ title, description, icon }) => {
   return (
     <div className={cn("flex flex-col lg:border-r py-10 relative group/feature border-b border-gray-200 bg-white hover:bg-gray-50 transition-colors duration-300")}>
       <div className="mb-4 relative z-10 px-10 text-gray-600 group-hover/feature:text-black transition-colors">{icon}</div>
-      <div className="text-lg font-bold mb-2 relative z-10 px-10">
-        <div className="absolute left-0 inset-y-0 h-6 group-hover/feature:h-8 w-1 rounded-tr-full rounded-br-full bg-gray-300 group-hover/feature:bg-black transition-all duration-200 origin-center" />
-        <span className="group-hover/feature:translate-x-2 transition duration-200 inline-block text-gray-900">{title}</span>
-      </div>
-      <p className="text-sm text-gray-500 max-w-xs relative z-10 px-10 leading-relaxed">{description}</p>
+      <h3 className="text-lg font-bold mb-2 relative z-10 px-10 text-gray-950">
+        <div className="absolute left-0 top-1/2 -translate-y-1/2 h-6 group-hover/feature:h-8 w-1 rounded-tr-full rounded-br-full bg-gray-300 group-hover/feature:bg-black transition-all duration-200" />
+        <span className="group-hover/feature:translate-x-2 transition duration-200 inline-block">{title}</span>
+      </h3>
+      <p className="text-sm text-gray-600 max-w-xs relative z-10 px-10 leading-relaxed">{description}</p>
     </div>
   );
 };
@@ -478,7 +478,7 @@ function WorkflowCard({ step, title, desc, children }) {
         <span className="text-xs font-bold text-white bg-black w-6 h-6 rounded-full flex items-center justify-center font-mono shadow-md">{step}</span>
         <h3 className="text-lg font-bold text-gray-900 tracking-tight">{title}</h3>
       </div>
-      <p className="text-gray-500 text-sm leading-relaxed">{desc}</p>
+      <p className="text-gray-600 text-sm leading-relaxed">{desc}</p>
     </div>
   );
 }
@@ -491,7 +491,7 @@ function TerminalSimulation() {
 
   useEffect(() => {
     const sequence = [
-      { text: "remote: Resolving deltas: 100% (12/12), completed.", color: "text-gray-500", delay: 800 },
+      { text: "remote: Resolving deltas: 100% (12/12), completed.", color: "text-gray-400", delay: 800 },
       { text: "remote: Build triggered for commit a1b2c3d", color: "text-blue-400", delay: 1600 },
       { text: "✓ Building environment...", color: "text-emerald-400", delay: 2400 },
       { text: "✓ Installing dependencies...", color: "text-emerald-400", delay: 3000 },
@@ -526,9 +526,9 @@ function TerminalSimulation() {
           <span>{line.text}</span>
         </div>
       ))}
-      <div className="flex items-center gap-2 text-gray-600 animate-pulse mt-1 shrink-0">
+      <div className="flex items-center gap-2 text-gray-400 animate-pulse mt-1 shrink-0">
         <span className="text-emerald-500 font-bold">➜</span>
-        <span className="w-2.5 h-5 bg-gray-600"></span>
+        <span className="w-2.5 h-5 bg-gray-500"></span>
       </div>
     </div>
   );
