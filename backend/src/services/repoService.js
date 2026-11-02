@@ -63,7 +63,16 @@ export async function cloneRepo({ repoOwner, repoName, ref, prNumber, accessToke
         if (ref) {
           await git.cwd(tempDir).checkout(ref);
         } else {
-          throw prErr;
+          // Fallback to default branch (main or master) if PR ref does not exist on remote
+          try {
+            await git.cwd(tempDir).checkout("main");
+          } catch {
+            try {
+              await git.cwd(tempDir).checkout("master");
+            } catch {
+              throw prErr;
+            }
+          }
         }
       }
     } else if (ref) {

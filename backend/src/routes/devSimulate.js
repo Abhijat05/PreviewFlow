@@ -13,7 +13,7 @@ router.post("/dev/sim-pr", async (req, res) => {
   }
 
   try {
-    const { projectId, prNumber, action = "open" } = req.body || {};
+    const { projectId, prNumber, action = "open", ref } = req.body || {};
 
     if (!projectId || typeof projectId !== "string" || !projectId.trim()) {
       return res.status(400).json({ error: "valid_projectId_required" });
@@ -39,7 +39,11 @@ router.post("/dev/sim-pr", async (req, res) => {
     if (action === "close") {
       await handlePRClosed({ project, prNumber: parsedPrNumber });
     } else {
-      await handlePROpenOrSync({ project, prNumber: parsedPrNumber });
+      await handlePROpenOrSync({
+        project,
+        prNumber: parsedPrNumber,
+        ref: typeof ref === "string" && ref.trim() ? ref.trim() : undefined
+      });
     }
 
     return res.json({ ok: true });
