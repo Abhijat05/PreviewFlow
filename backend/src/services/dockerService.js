@@ -8,25 +8,76 @@ import { getIO } from "../socket.js";
 import { resolveProjectConfig } from "./detectProjectType.js";
 import { getPortPoolForTier } from "../middleware/subscription.js";
 
+// Ensure common Windows Docker directories are present in process.env.PATH
+if (process.platform === "win32") {
+  const commonDockerDirs = [
+    "D:\\Docker\\Docker\\resources\\bin",
+    "C:\\Program Files\\Docker\\Docker\\resources\\bin",
+    path.join(process.env.ProgramFiles || "C:\\Program Files", "Docker\\Docker\\resources\\bin"),
+    path.join(process.env.LOCALAPPDATA || "", "Docker\\resources\\bin")
+  ];
+  const currentPath = process.env.PATH || process.env.Path || "";
+  for (const dir of commonDockerDirs) {
+    if (fs.existsSync(dir) && !currentPath.includes(dir)) {
+      process.env.PATH = `${dir};${process.env.PATH}`;
+    }
+  }
+}
+
+/**
+ * Resolves the Docker CLI executable path across platforms
+ */
+export function getDockerExecutable() {
+  if (process.env.DOCKER_BIN && fs.existsSync(process.env.DOCKER_BIN)) {
+    return process.env.DOCKER_BIN;
+  }
+
+  if (process.platform === "win32") {
+    const candidates = [
+      "D:\\Docker\\Docker\\resources\\bin\\docker.exe",
+      "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
+      path.join(process.env.ProgramFiles || "C:\\Program Files", "Docker\\Docker\\resources\\bin\\docker.exe"),
+      path.join(process.env.LOCALAPPDATA || "", "Docker\\resources\\bin\\docker.exe")
+    ];
+
+    for (const p of candidates) {
+      if (fs.existsSync(p)) return p;
+    }
+  }
+
+  return "docker";
+}
+
 /**
  * Execute a command safely via spawn without shell expansion, streaming logs
  */
 export function runCommand(executable, args = [], onData) {
+  const resolvedBin = executable === "docker" ? getDockerExecutable() : executable;
+
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, args, {
+    const child = spawn(resolvedBin, args, {
       stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true
+      windowsHide: true,
+      env: process.env
     });
 
     child.stdout?.on("data", (d) => onData?.(d.toString()));
     child.stderr?.on("data", (d) => onData?.(d.toString()));
 
     child.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`Command '${executable} ${args.join(" ")}' failed with exit code ${code}`));
+      if (code === 0) {
+        resolve();
+      } else {
+        const errorMsg = `Command '${executable} ${args.join(" ")}' failed with exit code ${code}`;
+        onData?.(`\n[Process Error] ${errorMsg}\n`);
+        reject(new Error(errorMsg));
+      }
     });
 
-    child.on("error", reject);
+    child.on("error", (err) => {
+      onData?.(`\n[Process Error] Failed to execute '${executable}': ${err.message}\n`);
+      reject(err);
+    });
   });
 }
 
@@ -59,7 +110,8 @@ export async function removeContainer(name) {
       return resolve(false);
     }
 
-    execFile("docker", ["rm", "-f", name], (err) => {
+    const dockerBin = getDockerExecutable();
+    execFile(dockerBin, ["rm", "-f", name], (err) => {
       resolve(!err);
     });
   });
@@ -196,7 +248,8 @@ export function removeContainerIfExists(containerName) {
       return;
     }
 
-    const output = execFileSync("docker", ["ps", "-aq", "-f", `name=${containerName}`], {
+    const dockerBin = getDockerExecutable();
+    const output = execFileSync(dockerBin, ["ps", "-aq", "-f", `name=${containerName}`], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"]
     }).trim();
@@ -205,7 +258,7 @@ export function removeContainerIfExists(containerName) {
       const ids = output.split(/\s+/).filter((id) => /^[a-zA-Z0-9]+$/.test(id));
       for (const id of ids) {
         try {
-          execFileSync("docker", ["rm", "-f", id], { stdio: "ignore" });
+          execFileSync(dockerBin, ["rm", "-f", id], { stdio: "ignore" });
         } catch (err) {
           console.warn("Failed to remove container", id, err?.message || err);
         }
