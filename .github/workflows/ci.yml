@@ -1,0 +1,162 @@
+name: CI
+
+# Trigger workflow on pushes to main and pull requests targeting main
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - ".gitignore"
+      - "LICENSE"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - ".gitignore"
+      - "LICENSE"
+  workflow_dispatch:
+
+# Cancel redundant in-progress runs when new commits are pushed
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # =========================================================================
+  # Job 1: Frontend CI (Linting & Production Bundle Build)
+  # =========================================================================
+  frontend:
+    name: Frontend (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20.x, 22.x]
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies (clean install)
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Run Vite production build
+        run: npm run build
+
+  # =========================================================================
+  # Job 2: Backend CI (Prisma Schema Validation & Automated Test Suite)
+  # =========================================================================
+  backend:
+    name: Backend (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20.x, 22.x]
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: previewflow_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    defaults:
+      run:
+        working-directory: backend
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: "postgresql://postgres:password@localhost:5432/previewflow_test"
+      JWT_SECRET: "ci-secret-key-at-least-32-characters-long-previewflow"
+      PORT: 4000
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm"
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies (clean install & prisma generate)
+        run: npm ci
+
+      - name: Validate Prisma schema syntax
+        run: npx prisma validate
+
+      - name: Push Prisma schema to test PostgreSQL
+        run: npx prisma db push --skip-generate
+
+      - name: Run test suite
+        run: npm test
+
+  # =========================================================================
+  # Job 3: Docker Deployment Templates Validation
+  # =========================================================================
+  docker-templates:
+    name: Docker Templates Syntax Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate Dockerfiles syntax
+        run: |
+          for file in backend/deploy-templates/*.Dockerfile; do
+            echo "::group::Validating $file"
+            docker buildx build --file "$file" --check backend/deploy-templates
+            echo "::endgroup::"
+          done
+
+  # =========================================================================
+  # Job 4: CI Status Gatekeeper (Unified Required Status Check for Merging)
+  # =========================================================================
+  ci-status:
+    name: CI Passed
+    runs-on: ubuntu-latest
+    needs: [frontend, backend, docker-templates]
+    if: always()
+    steps:
+      - name: Evaluate overall CI pipeline status
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "❌ One or more CI jobs failed or were cancelled."
+            exit 1
+          fi
+          echo "✅ All CI checks passed successfully!"
