@@ -1,260 +1,290 @@
-# PR Review – GitHub Pull Request Preview Environments
+<div align="center">
 
-PR Review is a full‑stack app that creates **ephemeral preview environments for GitHub pull requests**.  
-When a PR opens or updates, it clones the repo, builds a Docker image, runs the preview, streams build logs live, and cleans everything up when the PR is closed.
+# PreviewFlow
 
----
+### Ephemeral Preview Environments for GitHub Pull Requests
 
-## Features
+[![CI](https://github.com/AbhijatSinha05/pr-review/actions/workflows/ci.yml/badge.svg)](https://github.com/AbhijatSinha05/pr-review/actions/workflows/ci.yml)
+[![Node Version](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg)](https://nodejs.org)
+[![Docker](https://img.shields.io/badge/docker-compatible-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com)
+[![License: Custom](https://img.shields.io/badge/license-Custom-blue.svg)](LICENSE.txt)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-- **GitHub OAuth login** via [`backend/src/auth.js`](backend/src/auth.js)
-- **Repo onboarding** & project dashboard via [`backend/src/routes/githubRepos.js`](backend/src/routes/githubRepos.js) and [`backend/src/routes/connectRepo.js`](backend/src/routes/connectRepo.js)
-- **Automatic webhook creation** using [`backend/src/routes/createWebhook.js`](backend/src/routes/createWebhook.js)
-- **Secure webhook verification** with [`backend/src/utils/gitHubVerify.verifyGithubSignature`](backend/src/utils/gitHubVerify.js)
-- **Per‑PR preview records** stored via [`backend/prisma/schema.prisma`](backend/prisma/schema.prisma)
-- **Clone & checkout PR ref** using [`backend/src/services/repoService.cloneRepo`](backend/src/services/repoService.js)
-- **Docker‑based deployments** orchestrated by [`backend/src/services/dockerService.buildAndRun`](backend/src/services/dockerService.js)
-- **Automatic container teardown** through [`backend/src/services/dockerService.stopContainer`](backend/src/services/dockerService.js)
-- **Real‑time build logs** over Socket.IO via [`backend/src/socket.js`](backend/src/socket.js) and [`frontend/src/pages/Logs.jsx`](frontend/src/pages/Logs.jsx)
-- **Project/preview dashboard** in [`frontend/src/pages/Dashboard.jsx`](frontend/src/pages/Dashboard.jsx)
+<p align="center">
+  PreviewFlow automatically provisions isolated, containerized preview environments whenever a GitHub Pull Request is opened or updated, streams build logs live to your browser, and cleans up containers upon PR closure.
+</p>
 
----
+[Key Features](#key-features) • [Architecture](#architecture) • [Supported Frameworks](#supported-framework-templates) • [Prerequisites](#prerequisites) • [Quickstart](#quickstart) • [Local PR Simulation](#local-pr-simulation) • [Environment Variables](#environment-variables) • [Tech Stack](#tech-stack) • [Testing](#testing-and-code-quality) • [Contributing](#contributing) • [License](#license)
 
-## Architecture Overview
-
-### High‑level flow
-
-1. **User login**
-   - Frontend shows “Sign in with GitHub” from [`frontend/src/App.jsx`](frontend/src/App.jsx).
-   - Backend GitHub OAuth handled in [`backend/src/auth.js`](backend/src/auth.js) and [`backend/src/server.js`](backend/src/server.js).
-   - On success, backend issues a JWT (user id + GitHub access token) and redirects to `/auth/success`.
-   - [`frontend/src/pages/AuthSuccess.jsx`](frontend/src/pages/AuthSuccess.jsx) stores the token in `localStorage`.
-
-2. **Connect a repository**
-   - Frontend calls `GET /api/repos` from [`backend/src/routes/githubRepos.js`](backend/src/routes/githubRepos.js) to list accessible repos.
-   - User selects a repo; frontend posts to `POST /api/connect-repo` handled by [`backend/src/routes/connectRepo.js`](backend/src/routes/connectRepo.js).
-   - A `Project` is created in the DB with a generated `webhookSecret`.
-
-3. **Create GitHub webhook**
-   - After saving the project, frontend immediately calls `POST /api/create-webhook` from [`backend/src/routes/createWebhook.js`](backend/src/routes/createWebhook.js).
-   - This uses the user’s GitHub token to create a `pull_request` webhook pointing at  
-     `${PUBLIC_WEBHOOK_URL}/webhooks/github`.
-
-4. **Handle PR webhooks**
-   - GitHub sends events to `POST /webhooks/github` implemented in [`backend/src/routes/githubWebhook.js`](backend/src/routes/githubWebhook.js).
-   - Raw body and signature are verified via [`backend/src/utils/gitHubVerify.verifyGithubSignature`](backend/src/utils/gitHubVerify.js).
-   - For `opened`, `reopened`, `synchronize` actions, [`backend/src/services/prHandlers.handlePROpenOrSync`](backend/src/services/prHandlers.js) runs.
-   - For `closed` actions, [`backend/src/services/prHandlers.handlePRClosed`](backend/src/services/prHandlers.js) runs.
-
-5. **Build & run preview**
-   - `handlePROpenOrSync`:
-     - Upserts a `Preview` row for `(projectId, prNumber)` via Prisma.
-     - Clones repo & optional ref using [`backend/src/services/repoService.cloneRepo`](backend/src/services/repoService.js).
-     - Calls [`backend/src/services/dockerService.buildAndRun`](backend/src/services/dockerService.js) to:
-       - Build a Docker image (currently using `deploy-templates/vite.Dockerfile`).
-       - Run a container on a dynamic host port (`get-port`).
-       - Stream build output through Socket.IO room keyed by `previewId`.
-       - Persist `url`, `status`, `buildLogs`, and `containerName` on the `Preview`.
-
-6. **View dashboard & logs**
-   - `GET /api/projects` from [`backend/src/routes/projectDashboard.js`](backend/src/routes/projectDashboard.js) powers  
-     [`frontend/src/pages/Dashboard.jsx`](frontend/src/pages/Dashboard.jsx).
-   - Users can click into `/logs/:id` which renders [`frontend/src/pages/Logs.jsx`](frontend/src/pages/Logs.jsx):
-     - Loads saved logs via `GET /api/preview/:id/logs` from [`backend/src/routes/logs.js`](backend/src/routes/logs.js).
-     - Connects to Socket.IO (`/register` event) to stream new build chunks.
-
-7. **Teardown on PR close**
-   - `handlePRClosed` finds the related `Preview`, stops the container via  
-     [`backend/src/services/dockerService.stopContainer`](backend/src/services/dockerService.js), and marks the preview as `deleted`.
+</div>
 
 ---
 
-## Tech Stack
+## Key Features
 
-- **Frontend**
-  - React 19, React Router (`BrowserRouter`) – [`frontend/src/App.jsx`](frontend/src/App.jsx)
-  - Vite – [`frontend/vite.config.js`](frontend/vite.config.js)
-  - Tailwind CSS – [`frontend/tailwind.config.js`](frontend/tailwind.config.js), [`frontend/src/index.css`](frontend/src/index.css)
-  - Axios – [`frontend/src/pages/Dashboard.jsx`](frontend/src/pages/Dashboard.jsx), [`frontend/src/pages/ConnectRepo.jsx`](frontend/src/pages/ConnectRepo.jsx)
-  - Socket.IO client – [`frontend/src/pages/Logs.jsx`](frontend/src/pages/Logs.jsx)
-
-- **Backend**
-  - Express 5 – [`backend/src/server.js`](backend/src/server.js)
-  - Passport + GitHub OAuth2 – [`backend/src/auth.js`](backend/src/auth.js)
-  - Prisma + PostgreSQL – [`backend/src/db.js`](backend/src/db.js), [`backend/prisma/schema.prisma`](backend/prisma/schema.prisma)
-  - Socket.IO – [`backend/src/socket.js`](backend/src/socket.js)
-  - Docker CLI – [`backend/src/services/dockerService.js`](backend/src/services/dockerService.js)
-  - simple-git – [`backend/src/services/repoService.js`](backend/src/services/repoService.js)
-
-- **Deployment templates**
-  - Vite (SPA) – [`backend/deploy-templates/vite.Dockerfile`](backend/deploy-templates/vite.Dockerfile)
-  - Static – [`backend/deploy-templates/static.Dockerfile`](backend/deploy-templates/static.Dockerfile)
-  - Node backend – [`backend/deploy-templates/node-backend.Dockerfile`](backend/deploy-templates/node-backend.Dockerfile)
+- **Zero-Config Framework Detection**: Automatically inspects repository dependencies to identify Vite, Next.js, Node.js backends, static HTML, or custom Dockerfiles, mapping the appropriate internal port and build template.
+- **Isolated Container Sandboxes**: Deploys preview applications inside resource-capped Docker containers (`--memory 512m`, `--cpus 1.0`, `--pids-limit 100`) enforced with non-root security boundaries (`no-new-privileges`, `cap-drop ALL`).
+- **Real-Time Streaming Build Logs**: Streams build stdout and stderr chunk-by-chunk via Socket.IO directly to an in-browser terminal with ANSI syntax coloring.
+- **Cryptographic Webhook Verification**: Verifies incoming GitHub `X-Hub-Signature-256` payload signatures using per-project HMAC-SHA256 secrets.
+- **Automated Lifecycle Teardown**: Automatically terminates containers, clears temporary checkout directories, and reallocates host ports when a pull request is merged or closed.
+- **Local Simulation Engine**: Built-in development endpoint (`/dev/sim-pr`) enables local end-to-end pipeline verification without requiring public tunnels or active GitHub PRs.
+- **Tiered Usage Governance**: Multi-tenant subscription tiers (`FREE`, `HOBBY`, `PRO`, `ENTERPRISE`) enforce repository limits and concurrent preview quotas.
 
 ---
 
-## Project Structure
+## Architecture
 
-```text
-pr-review/
-├── LICENSE.txt
-├── README.md
-├── backend/
-│   ├── package.json
-│   ├── .env.example
-│   ├── prisma/
-│   │   ├── schema.prisma
-│   │   └── migrations/
-│   ├── deploy-templates/
-│   └── src/
-│       ├── server.js
-│       ├── auth.js
-│       ├── db.js
-│       ├── socket.js
-│       ├── routes/
-│       ├── services/
-│       └── utils/
-└── frontend/
-    ├── package.json
-    ├── index.html
-    ├── vite.config.js
-    ├── tailwind.config.js
-    └── src/
-        ├── main.jsx
-        ├── App.jsx
-        ├── api.js
-        ├── pages/
-        └── index.css
 ```
+                            GitHub Pull Request
+                                     |
+                                     v
+                     [ GitHub Webhook Event (POST) ]
+                                     |
+                                     v
+                     +------------------------------+
+                     | Express API (HMAC-SHA256)    |
+                     |  - Verify Signature          |
+                     |  - Enforce Tier Quotas       |
+                     +--------------+---------------+
+                                    |
+                                    v
+                     +------------------------------+
+                     | Repo Cloner (simple-git)     |
+                     |  - Fetch PR ref (depth 50)   |
+                     |  - Default branch fallback   |
+                     +--------------+---------------+
+                                    |
+                                    v
+                     +------------------------------+
+                     | Project Type Detector        |
+                     |  (Vite / Next / Node / Nginx)|
+                     +--------------+---------------+
+                                    |
+                  +-----------------+-----------------+
+                  |                                   |
+                  v                                   v
+      +----------------------+             +---------------------+
+      | Docker Engine        |             | Socket.IO Server    |
+      |  - Build Multi-Stage |             |  - Stream chunks to |
+      |  - Bind to Localhost |------------>|    room subscribers |
+      |  - Start Container   |             +----------+----------+
+      +----------+-----------+                        |
+                 |                                    |
+                 v                                    v
+       [ http://localhost:PORT ]            [ React Dashboard ]
+        (Live Preview URL)                  (Build Terminal)
+```
+
+---
+
+## Supported Framework Templates
+
+Pre-configured, production-hardened Docker templates are located in [`backend/deploy-templates/`](backend/deploy-templates/):
+
+| Framework / Runtime | Detected Markers | Container Port | Multi-Stage Base Images |
+| :--- | :--- | :---: | :--- |
+| **Vite / React / Vue** | `vite.config.*`, or `react` build script | `80` | `node:18-alpine` -> `nginx:alpine` |
+| **Next.js** | `next.config.*`, or `next` dependency | `3000` | `node:18-alpine` (builder) -> `node:18-alpine` (runner) |
+| **Node.js Backend** | `package.json` with `start` script | `3000` | `node:18-alpine` |
+| **Static HTML / SPA** | `index.html` (no `package.json`) | `80` | `nginx:alpine` |
+| **Custom Dockerfile** | `Dockerfile` in root directory | `80` (custom) | User-defined |
 
 ---
 
 ## Prerequisites
 
-- Node.js ≥ 18
-- Docker installed and running
-- PostgreSQL database
-- GitHub OAuth App (Client ID & Secret)
-- Public HTTPS URL for webhooks (`ngrok`, `cloudflared`, or deployed server)
+Ensure the following tools are installed before running PreviewFlow:
+
+- [Node.js](https://nodejs.org/) `>= 20.0.0`
+- [Docker Engine / Docker Desktop](https://www.docker.com/products/docker-desktop/) (running)
+- [PostgreSQL](https://www.postgresql.org/) database
+- [Git](https://git-scm.com/)
 
 ---
 
-## Backend Setup
+## Quickstart
 
-1. **Install dependencies**
+### 1. Clone the repository
 
+```bash
+git clone https://github.com/AbhijatSinha05/pr-review.git
+cd pr-review
+```
+
+---
+
+### 2. Configure and start the Backend
+
+1. Navigate to the backend directory and install dependencies:
    ```bash
    cd backend
    npm install
    ```
 
-2. **Configure environment**
-
-   Copy [`backend/.env.exxample`](backend/.env.exxample) to `.env`:
-
+2. Create an environment configuration file:
    ```bash
-   DATABASE_URL="postgres connection string"
-   GITHUB_CLIENT_ID="your github client id"
-   GITHUB_CLIENT_SECRET="your github client secret"
-   JWT_SECRET="a strong secret"
-   PUBLIC_WEBHOOK_URL="https://your-public-backend-url"
+   cp .env.exxample .env
+   ```
+
+3. Update `.env` with your credentials:
+   ```env
+   # PostgreSQL Connection String
+   DATABASE_URL="postgresql://postgres:password@localhost:5432/previewflow"
+
+   # GitHub OAuth Application
+   GITHUB_CLIENT_ID="your_github_client_id"
+   GITHUB_CLIENT_SECRET="your_github_client_secret"
+
+   # Authentication and URLs
+   JWT_SECRET="your-secure-random-jwt-secret-at-least-32-chars"
+   PUBLIC_WEBHOOK_URL="https://your-public-url.ngrok-free.app"
    PUBLIC_PREVIEW_BASE="http://localhost"
    PORT=4000
    ```
 
-3. **Run Prisma migrations**
-
+4. Push the Prisma database schema:
    ```bash
-   npx prisma migrate dev
+   npx prisma db push
    ```
 
-4. **Start backend (with Socket.IO)**
-
+5. Start the backend server:
    ```bash
    npm run dev
    ```
-
-   Backend runs at `http://localhost:4000`.
+   *Backend runs on `http://localhost:4000`.*
 
 ---
 
-## Frontend Setup
+### 3. Configure and start the Frontend
 
-1. **Install dependencies**
-
+1. In a separate terminal, navigate to the frontend directory:
    ```bash
    cd frontend
    npm install
    ```
 
-2. **Run dev server**
+2. Create the frontend environment configuration:
+   ```bash
+   cp .env.example .env
+   ```
+   *(Defaults to `VITE_API_URL=http://localhost:4000`)*
 
+3. Start the Vite development server:
    ```bash
    npm run dev
    ```
-
-   Frontend runs at `http://localhost:5173`.
-
----
-
-## Using the App
-
-1. **Login**
-   - Visit `http://localhost:5173`.
-   - Click “Sign in with GitHub” (redirects to `/auth/github` on backend).
-   - After redirect back to `/auth/success`, the JWT is stored and you’re taken to `/`.
-
-2. **Connect a repository**
-   - Navigate to `/connect` (Connect Repo page) implemented in [`frontend/src/pages/ConnectRepo.jsx`](frontend/src/pages/ConnectRepo.jsx).
-   - Pick a repo and click **Connect**.
-   - This:
-     - Saves a `Project` via `POST /api/connect-repo`.
-     - Immediately calls `POST /api/create-webhook` to register the GitHub webhook.
-
-3. **Open/update a PR on GitHub**
-   - A `pull_request` webhook hits `POST /webhooks/github`.
-   - A `Preview` row is created/updated and a Docker build starts.
-
-4. **Watch logs**
-   - Go to `/logs/:previewId` served by [`frontend/src/pages/Logs.jsx`](frontend/src/pages/Logs.jsx).
-   - The page:
-     - Fetches saved logs from `GET /api/preview/:id/logs`.
-     - Subscribes to Socket.IO room for that preview to stream new logs until build finishes.
-
-5. **Access the preview**
-   - Once build is live, the preview URL is stored on the `Preview` and listed in the dashboard (`/`), rendered by [`frontend/src/pages/Dashboard.jsx`](frontend/src/pages/Dashboard.jsx).
-
-6. **Close the PR**
-   - `handlePRClosed` stops the Docker container and marks the preview as `deleted`.
+   *Frontend interface runs on `http://localhost:5173`.*
 
 ---
 
-## Development Utilities
+## Local PR Simulation
 
-- **Simulate PR events without GitHub**
+You do not need a public IP or webhook proxy (e.g. ngrok) to test PreviewFlow locally. Use the built-in development simulation endpoint to trigger the complete clone, build, run, and log streaming cycle:
 
-  [`backend/src/routes/devSimulate.js`](backend/src/routes/devSimulate.js) exposes:
+```bash
+curl -X POST http://localhost:4000/dev/sim-pr \
+  -H "Content-Type: application/json" \
+  -d '{
+    "projectId": "<YOUR_PROJECT_ID>",
+    "prNumber": 1,
+    "action": "open",
+    "ref": "main"
+  }'
+```
 
-  ```bash
-  curl -X POST http://localhost:4000/dev/sim-pr \
-    -H "Content-Type: application/json" \
-    -d '{"projectId":"<project-id>","prNumber":1,"action":"open"}'
-  ```
+### Available Simulation Actions
+- `"action": "open"`: Clones repository, builds Docker image, and launches container on an allocated port.
+- `"action": "sync"`: Rebuilds the preview environment with the latest commit.
+- `"action": "close"`: Terminates the Docker container and releases the port.
 
-- **Logs API**
+---
 
-  - `GET /api/preview/:id/logs` – [`backend/src/routes/logs.js`](backend/src/routes/logs.js)
+## Environment Variables
+
+### Backend (`backend/.env`)
+
+| Variable | Description | Required | Default / Example |
+| :--- | :--- | :---: | :--- |
+| `DATABASE_URL` | PostgreSQL connection string | **Yes** | `postgresql://user:pass@localhost:5432/db` |
+| `JWT_SECRET` | Secret key used to sign and verify user JWTs | **Yes** | `super-secret-jwt-key-min-32-chars` |
+| `GITHUB_CLIENT_ID` | GitHub OAuth App Client ID | **Yes** | `Iv1.xxxxxxxxxxxx` |
+| `GITHUB_CLIENT_SECRET` | GitHub OAuth App Client Secret | **Yes** | `xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx` |
+| `PUBLIC_WEBHOOK_URL` | Public HTTPS URL for GitHub webhook callbacks | **Yes** | `https://api.yourdomain.com` |
+| `PUBLIC_PREVIEW_BASE` | Base URL used to construct preview links | No | `http://localhost` |
+| `PORT` | Port for the Express and Socket.IO server | No | `4000` |
+| `DOCKER_BIN` | Explicit file path to Docker executable | No | Auto-detected |
+
+### Frontend (`frontend/.env`)
+
+| Variable | Description | Required | Default |
+| :--- | :--- | :---: | :--- |
+| `VITE_API_URL` | Base URL of the backend API | **Yes** | `http://localhost:4000` |
+
+---
+
+## Tech Stack
+
+| Layer | Technologies |
+| :--- | :--- |
+| **Frontend** | React 19, Vite, Tailwind CSS, Lucide Icons, Framer Motion, Socket.IO Client, Axios |
+| **Backend** | Node.js (ESM), Express 5, Prisma ORM, Socket.IO, Dockerode, simple-git |
+| **Database** | PostgreSQL (relational schema with cascade rules and composite indexes) |
+| **Sandboxing** | Docker Engine (multi-stage builds, non-root execution, cgroups limits) |
+| **CI / Automation** | GitHub Actions (Matrix validation across Node 20.x and 22.x, Docker syntax checks) |
+
+---
+
+## Testing and Code Quality
+
+Run tests and validation locally across both applications:
+
+```bash
+# Backend test suite (unit, integration, and security checks)
+cd backend
+npm test
+
+# Frontend static analysis and linting
+cd frontend
+npm run lint
+
+# Frontend production bundle verification
+npm run build
+```
+
+---
+
+## Contributing
+
+To contribute to PreviewFlow:
+
+1. Fork the repository.
+2. Create a dedicated branch for your change:
+   ```bash
+   git checkout -b feat/custom-dockerfile-caching
+   ```
+3. Commit your changes following the [Conventional Commits](https://www.conventionalcommits.org/) convention:
+   ```bash
+   git commit -m "feat(docker): add build cache layer support"
+   ```
+4. Push to your fork:
+   ```bash
+   git push origin feat/custom-dockerfile-caching
+   ```
+5. Submit a Pull Request targeting the `main` branch. Ensure all automated CI checks pass.
 
 ---
 
 ## License
 
-This project is licensed under a **custom non‑commercial license** – see [`LICENSE.txt`](LICENSE.txt) for full terms.
+This project is licensed under a **custom non-commercial license**. Refer to [`LICENSE.txt`](LICENSE.txt) for complete terms.
 
-In summary:
+- **Non-Commercial Use**: Free for personal, hobby, educational, research, or internal non-commercial use.
+- **Commercial Use**: Any commercial or revenue-generating deployment requires prior written authorization.
+- **Attribution**: Any public or production deployment must include attribution:  
+  *"This project includes software created by Abhijat Sinha."*
 
-- Free to use for personal, hobby, educational, research, or internal non‑commercial purposes.
-- Any commercial or revenue‑generating use requires prior written permission and a separate license agreement from the copyright holder.
-- Any production use must include clear attribution:  
-  “This project includes software created by Abhijat Sinha.”
-- Redistribution must include this license text and copyright notice.
+---
+
+<div align="center">
+  <sub>Maintained by <a href="https://github.com/AbhijatSinha05">Abhijat Sinha</a></sub>
+</div>
