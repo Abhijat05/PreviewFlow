@@ -43,7 +43,7 @@ export async function enforceBuildLimit(userId, tier) {
   return { allowed: true };
 }
 
-let asyncRebuildWorker = async ({ preview, userId, previewId }) => {
+const defaultAsyncRebuildWorker = async ({ preview, userId, previewId }) => {
   let repoPath = null;
   try {
     if (preview.containerName) {
@@ -111,78 +111,14 @@ let asyncRebuildWorker = async ({ preview, userId, previewId }) => {
   }
 };
 
+let asyncRebuildWorker = defaultAsyncRebuildWorker;
+
 export function setAsyncRebuildWorker(worker) {
   asyncRebuildWorker = worker;
 }
 
 export function resetAsyncRebuildWorker() {
-  asyncRebuildWorker = async ({ preview, userId, previewId }) => {
-    let repoPath = null;
-    try {
-      if (preview.containerName) {
-        await removeContainer(preview.containerName);
-      }
-
-      repoPath = await cloneRepo({
-        repoOwner: preview.project.repoOwner,
-        repoName: preview.project.repoName,
-        prNumber: preview.prNumber,
-        accessToken: preview.project.accessToken
-      });
-
-      const url = await buildPreview({
-        project: preview.project,
-        previewId,
-        repoPath,
-        prNumber: preview.prNumber
-      });
-
-      const updated = await prisma.preview.findUnique({
-        where: { id: previewId }
-      });
-
-      emitScopedStatus(updated.id, userId, {
-        previewId: updated.id,
-        projectId: updated.projectId,
-        prNumber: updated.prNumber,
-        status: updated.status,
-        url: updated.url,
-        buildStartedAt: updated.buildStartedAt,
-        buildCompletedAt: updated.buildCompletedAt,
-        containerName: updated.containerName
-      });
-    } catch (err) {
-      console.error(`Async build failed for preview ${previewId}:`, err?.message || err);
-
-      await prisma.preview.update({
-        where: { id: previewId },
-        data: {
-          status: "error",
-          buildCompletedAt: new Date(),
-          url: null,
-          containerName: null
-        }
-      });
-
-      const updated = await prisma.preview.findUnique({
-        where: { id: previewId }
-      });
-
-      emitScopedStatus(updated.id, userId, {
-        previewId: updated.id,
-        projectId: updated.projectId,
-        prNumber: updated.prNumber,
-        status: updated.status,
-        url: updated.url,
-        buildStartedAt: updated.buildStartedAt,
-        buildCompletedAt: updated.buildCompletedAt
-      });
-    } finally {
-      if (repoPath) {
-        try { fs.rmSync(repoPath, { recursive: true, force: true }); } catch {}
-      }
-    }
-  };
+  asyncRebuildWorker = defaultAsyncRebuildWorker;
 }
 
 /* ----------------------------------------------------------

@@ -12,13 +12,20 @@ describe("6. Prisma & Database Integration Tests", () => {
     const dbUrl = process.env.DATABASE_URL || "";
 
     // 1. Production Safeguard: Never run tests against production Supabase or non-test databases
-    const isProductionDb =
-      dbUrl.includes("supabase.co") ||
-      dbUrl.includes("supabase.com") ||
-      dbUrl.includes("pooler.supabase.com");
+    const isLocalhost =
+      dbUrl.includes("localhost") ||
+      dbUrl.includes("127.0.0.1") ||
+      dbUrl.includes("previewflow_test");
 
-    if (isProductionDb) {
-      console.warn("⚠️ [Database Guard] Production database URL detected in environment. Skipping database integration tests to prevent data mutation.");
+    const isExplicitlyRemote =
+      dbUrl.includes("supabase") ||
+      dbUrl.includes("neon.tech") ||
+      dbUrl.includes("render.com") ||
+      dbUrl.includes("railway.app") ||
+      !isLocalhost;
+
+    if (isExplicitlyRemote) {
+      console.warn("⚠️ [Database Guard] Production or non-local database URL detected in environment. Skipping database integration tests to prevent data mutation.");
       return;
     }
 
