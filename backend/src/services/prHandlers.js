@@ -22,7 +22,7 @@ function emitStatus(previewId, userId, payload) {
  *
  * Creates/upserts a preview record and triggers buildPreview.
  */
-export async function handlePROpenOrSync({ project, prNumber, ref }) {
+export async function handlePROpenOrSync({ project, prNumber, ref, cloner = cloneRepo, builder = buildPreview }) {
   const preview = await prisma.preview.upsert({
     where: { projectId_prNumber: { projectId: project.id, prNumber } },
     update: { status: "building" },
@@ -36,7 +36,7 @@ export async function handlePROpenOrSync({ project, prNumber, ref }) {
     status: "building"
   });
 
-  const repoPath = await cloneRepo({
+  const repoPath = await cloner({
     repoOwner: project.repoOwner,
     repoName: project.repoName,
     ref,
@@ -46,7 +46,7 @@ export async function handlePROpenOrSync({ project, prNumber, ref }) {
 
   try {
     try {
-      const url = await buildPreview({
+      const url = await builder({
         project,
         previewId: preview.id,
         repoPath,
@@ -84,7 +84,7 @@ export async function handlePROpenOrSync({ project, prNumber, ref }) {
  *
  * Stops and removes the container if present, marks preview deleted.
  */
-export async function handlePRClosed({ project, prNumber }) {
+export async function handlePRClosed({ project, prNumber, containerRemover = removeContainer }) {
   const preview = await prisma.preview.findFirst({
     where: { projectId: project.id, prNumber }
   });
@@ -93,7 +93,7 @@ export async function handlePRClosed({ project, prNumber }) {
 
   if (preview.containerName) {
     try {
-      await removeContainer(preview.containerName);
+      await containerRemover(preview.containerName);
     } catch (e) {
       console.warn("Failed to remove container on PR close:", e?.message || e);
     }

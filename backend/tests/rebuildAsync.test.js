@@ -1,12 +1,29 @@
-import { test, describe } from "node:test";
+import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
   handleRebuildPreview,
   handleDeletePreview,
   enforceBuildLimit
 } from "../src/routes/previewActions.js";
+import { prisma } from "../src/db.js";
 
 describe("Async Rebuild Flow & Concurrency Protection", () => {
+  let originalFindUnique;
+  let originalCount;
+  let originalUpdate;
+
+  beforeEach(() => {
+    originalFindUnique = prisma.preview.findUnique;
+    originalCount = prisma.preview.count;
+    originalUpdate = prisma.preview.update;
+  });
+
+  afterEach(() => {
+    prisma.preview.findUnique = originalFindUnique;
+    prisma.preview.count = originalCount;
+    prisma.preview.update = originalUpdate;
+  });
+
   function mockRes() {
     return {
       statusCode: 200,
@@ -36,6 +53,8 @@ describe("Async Rebuild Flow & Concurrency Protection", () => {
   });
 
   test("handleRebuildPreview rejects non-existent preview with 404", async () => {
+    prisma.preview.findUnique = async () => null;
+
     const req = {
       params: { id: "non_existent_cuid_123" },
       user: { userId: "user_1", tier: "FREE" }
@@ -49,6 +68,8 @@ describe("Async Rebuild Flow & Concurrency Protection", () => {
   });
 
   test("handleDeletePreview rejects non-existent preview with 404", async () => {
+    prisma.preview.findUnique = async () => null;
+
     const req = {
       params: { id: "non_existent_cuid_123" },
       user: { userId: "user_1" }
@@ -63,7 +84,13 @@ describe("Async Rebuild Flow & Concurrency Protection", () => {
 
   test("enforceBuildLimit correctly blocks when concurrent build threshold is reached", async () => {
     // For FREE tier, max concurrent builds is 1
-    const result = await enforceBuildLimit("user_with_no_builds", "FREE");
-    assert.equal(result.allowed, true);
+    prisma.preview.count = async () => 0;
+    const allowedResult = await enforceBuildLimit("user_with_no_builds", "FREE");
+    assert.equal(allowedResult.allowed, true);
+
+    prisma.preview.count = async () => 1;
+    const blockedResult = await enforceBuildLimit("user_at_capacity", "FREE");
+    assert.equal(blockedResult.allowed, false);
+    assert.match(blockedResult.message, /allows only 1 concurrent build/i);
   });
 });

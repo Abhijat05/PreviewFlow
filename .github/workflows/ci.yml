@@ -58,6 +58,9 @@ jobs:
       - name: Run ESLint
         run: npm run lint
 
+      - name: Run frontend test suite
+        run: npm test
+
       - name: Run Vite production build
         run: npm run build
 

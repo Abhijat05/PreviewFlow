@@ -5,6 +5,14 @@ import { handlePROpenOrSync, handlePRClosed } from "../services/prHandlers.js";
 
 const router = express.Router();
 
+let openOrSyncHandler = handlePROpenOrSync;
+let closedHandler = handlePRClosed;
+
+export function setPRHandlers({ onOpenOrSync, onClosed } = {}) {
+  openOrSyncHandler = onOpenOrSync || handlePROpenOrSync;
+  closedHandler = onClosed || handlePRClosed;
+}
+
 export async function handleGithubWebhook(req, res) {
   try {
     const event = req.header("X-GitHub-Event");
@@ -53,14 +61,14 @@ export async function handleGithubWebhook(req, res) {
         return res.status(200).send("hobby_sync_ignored");
       }
 
-      await handlePROpenOrSync({
+      await openOrSyncHandler({
         project,
         prNumber,
         ref: headRef || headSha,
         user: project.user
       });
     } else if (action === "closed" || action === "deleted") {
-      await handlePRClosed({ project, prNumber });
+      await closedHandler({ project, prNumber });
     }
 
     return res.status(200).send("ok");

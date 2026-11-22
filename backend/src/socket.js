@@ -75,3 +75,7 @@ export function getIO() {
   if (!io) throw new Error("Socket.io not initialized. Call initSocket(server) first.");
   return io;
 }
+
+export function setIO(customIO) {
+  io = customIO;
+}

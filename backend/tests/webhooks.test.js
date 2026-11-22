@@ -1,12 +1,27 @@
-import { test, describe } from "node:test";
+import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "crypto";
 import { verifyGithubSignature } from "../src/utils/gitHubVerify.js";
 import { handleCreateWebhook } from "../src/routes/createWebhook.js";
 import { handleConnectRepo } from "../src/routes/connectRepo.js";
 import { handleGithubWebhook } from "../src/routes/githubWebhook.js";
+import { prisma } from "../src/db.js";
 
 describe("Webhook security, signature verification & routing", () => {
+  let originalFindUnique;
+  let originalFindMany;
+
+  beforeEach(() => {
+    originalFindUnique = prisma.project.findUnique;
+    originalFindMany = prisma.project.findMany;
+    prisma.project.findUnique = async () => null;
+    prisma.project.findMany = async () => [];
+  });
+
+  afterEach(() => {
+    prisma.project.findUnique = originalFindUnique;
+    prisma.project.findMany = originalFindMany;
+  });
   test("verifyGithubSignature correctly validates HMAC SHA-256 signatures", () => {
     const secret = "super_secret_webhook_key_123";
     const payload = JSON.stringify({ action: "opened", pull_request: { number: 42 } });

@@ -10,7 +10,7 @@ const lastStoredAt = {};
 export function startStatsWorker() {
   console.log("------Stats worker started------");
 
-  setInterval(async () => {
+  return setInterval(async () => {
     try {
       let io;
       try {

@@ -38,24 +38,25 @@ describe("Socket.io room isolation & authentication", () => {
     });
 
     await new Promise((resolve) => {
-      server.listen(0, () => {
+      server.listen(0, "127.0.0.1", () => {
         port = server.address().port;
         resolve();
       });
     });
   });
 
-  after(() => {
-    io.close();
-    server.close();
+  after(async () => {
+    io.disconnectSockets(true);
+    await new Promise((resolve) => io.close(resolve));
+    await new Promise((resolve) => server.close(resolve));
   });
 
   test("scoped emissions only reach authorized user rooms and not other users", async () => {
     const userAToken = jwt.sign({ userId: "user_A" }, process.env.JWT_SECRET);
     const userBToken = jwt.sign({ userId: "user_B" }, process.env.JWT_SECRET);
 
-    const clientA = Client(`http://127.0.0.1:${port}`, { transports: ["websocket"] });
-    const clientB = Client(`http://127.0.0.1:${port}`, { transports: ["websocket"] });
+    const clientA = Client(`http://127.0.0.1:${port}`, { autoConnect: true });
+    const clientB = Client(`http://127.0.0.1:${port}`, { autoConnect: true });
 
     await Promise.all([
       new Promise((res) => clientA.on("connect", res)),
