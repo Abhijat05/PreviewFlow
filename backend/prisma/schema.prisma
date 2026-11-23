@@ -14,6 +14,24 @@ enum UserTier {
   ENTERPRISE
 }
 
+enum BuildStatus {
+  QUEUED
+  RUNNING
+  RETRYING
+  COMPLETED
+  FAILED
+  SUPERSEDED
+  CANCELLED
+}
+
+enum BuildSource {
+  WEBHOOK_OPEN
+  WEBHOOK_SYNC
+  WEBHOOK_REOPEN
+  MANUAL_REBUILD
+  DEV_SIMULATION
+}
+
 model User {
   id        String    @id @default(cuid())
   githubId  String    @unique
@@ -54,9 +72,50 @@ model Preview {
   buildCompletedAt DateTime?
   metrics          PreviewMetric[]
 
+  activeBuildId     String?
+  activeBuild       Build?          @relation("ActivePreviewBuild", fields: [activeBuildId], references: [id], onDelete: SetNull)
+  latestBuildId     String?
+  desiredCommitSha  String?
+  deployedCommitSha String?
+  builds            Build[]         @relation("PreviewBuildHistory")
+
   @@unique([projectId, prNumber])
   @@index([status])
   @@index([port])
+}
+
+model Build {
+  id             String      @id @default(cuid())
+  previewId      String
+  preview        Preview     @relation("PreviewBuildHistory", fields: [previewId], references: [id], onDelete: Cascade)
+  buildNumber    Int
+  commitSha      String
+  commitMessage  String?
+  branch         String
+  source         BuildSource @default(WEBHOOK_SYNC)
+  status         BuildStatus @default(QUEUED)
+  attempt        Int         @default(1)
+  maxAttempts    Int         @default(3)
+  queuedAt       DateTime    @default(now())
+  startedAt      DateTime?
+  completedAt    DateTime?
+  failedAt       DateTime?
+  cancelledAt    DateTime?
+  workerId       String?
+  leaseExpiresAt DateTime?
+  imageTag       String?
+  containerName  String?
+  port           Int?
+  buildLogs      String?
+  errorMessage   String?
+  exitCode       Int?
+
+  activeForPreviews Preview[] @relation("ActivePreviewBuild")
+
+  @@unique([previewId, buildNumber])
+  @@index([previewId, status])
+  @@index([status, queuedAt])
+  @@index([workerId, leaseExpiresAt])
 }
 
 model PreviewMetric {

@@ -7,7 +7,7 @@ const originalMethods = new Map();
  * Creates mock implementations for Prisma models.
  */
 export function mockPrisma(overrides = {}) {
-  const models = ["user", "project", "preview", "previewMetric"];
+  const models = ["user", "project", "preview", "previewMetric", "build"];
   const defaultMethods = [
     "findUnique",
     "findFirst",
