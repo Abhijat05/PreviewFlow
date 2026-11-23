@@ -24,6 +24,7 @@ import { startStatsWorker } from "./services/statsWorker.js";
 import previewMetricsRoutes from "./routes/previewMetrics.js";
 import devSim from "./routes/devSimulate.js"; // Development simulation routes
 import { startPeriodicDiskCleanup } from "./services/repoService.js";
+import { createWorkerLoop } from "./services/buildWorker.js";
 
 const app = express();
 const server = http.createServer(app);
@@ -117,17 +118,45 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 const isTest = process.env.NODE_ENV === "test" || Boolean(process.env.NODE_TEST_CONTEXT);
+const PREVIEWFLOW_MODE = (process.env.PREVIEWFLOW_MODE || "all").toLowerCase();
 
-if (!isTest) {
-  initSocket(server);
-  startStatsWorker();
-  startPeriodicDiskCleanup();
+let buildWorkerInstance = null;
 
-  const PORT = process.env.PORT || 4000;
-  server.listen(PORT, () => {
-    console.log(`Backend running on http://localhost:${PORT}`);
-  });
+export function getBuildWorkerInstance() {
+  return buildWorkerInstance;
 }
 
-export { server };
+export function setBuildWorkerInstance(instance) {
+  buildWorkerInstance = instance;
+}
+
+if (!isTest) {
+  const shouldRunApi = PREVIEWFLOW_MODE === "all" || PREVIEWFLOW_MODE === "api";
+  const shouldRunWorker = PREVIEWFLOW_MODE === "all" || PREVIEWFLOW_MODE === "worker";
+
+  if (shouldRunApi) {
+    initSocket(server);
+    startStatsWorker();
+    startPeriodicDiskCleanup();
+
+    const PORT = process.env.PORT || 4000;
+    server.listen(PORT, () => {
+      console.log(`Backend [mode: ${PREVIEWFLOW_MODE}] running on http://localhost:${PORT}`);
+    });
+  }
+
+  if (shouldRunWorker) {
+    buildWorkerInstance = createWorkerLoop({
+      pollIntervalMs: Number(process.env.BUILD_POLL_INTERVAL_MS) || 2000,
+      leaseDurationSeconds: Number(process.env.BUILD_LEASE_SECONDS) || 60,
+      executeJob: async (job) => {
+        console.log(`[Worker] Processing build ${job.id} for preview ${job.previewId} (commit: ${job.commitSha})`);
+      }
+    });
+    buildWorkerInstance.start();
+    console.log(`[Worker] Build worker loop started (id: ${buildWorkerInstance.getWorkerId()})`);
+  }
+}
+
+export { server, PREVIEWFLOW_MODE };
 export default app;
