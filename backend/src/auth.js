@@ -6,9 +6,9 @@ import "dotenv/config";
 passport.use(
   new GitHubStrategy(
     {
-      clientID: process.env.GITHUB_CLIENT_ID,
-      clientSecret: process.env.GITHUB_CLIENT_SECRET,
-      callbackURL: "http://localhost:4000/auth/github/callback",
+      clientID: process.env.GITHUB_CLIENT_ID || "ci_mock_github_client_id",
+      clientSecret: process.env.GITHUB_CLIENT_SECRET || "ci_mock_github_client_secret",
+      callbackURL: process.env.GITHUB_CALLBACK_URL || "http://localhost:4000/auth/github/callback",
       scope: ["read:user", "repo"]
     },
     async (accessToken, refreshToken, profile, done) => {

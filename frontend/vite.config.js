@@ -18,6 +18,7 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: "./src/test/setup.js",
     css: false,
+    execArgv: ["--require", path.resolve(__dirname, "./src/test/node20-polyfill.cjs")],
   },
   build: {
     rollupOptions: {
