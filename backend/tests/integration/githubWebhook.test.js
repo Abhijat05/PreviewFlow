@@ -229,4 +229,102 @@ describe("5.2 GitHub Webhook API Integration Tests", () => {
     assert.equal(res.text, "ok");
     assert.equal(closeCalled, true);
   });
+
+  test("rejects duplicate webhook delivery with 200 duplicate when X-GitHub-Delivery was already recorded", async () => {
+    prisma.project.findMany = async () => [mockProject];
+
+    let handlerCalls = 0;
+    setPRHandlers({
+      onOpenOrSync: async () => {
+        handlerCalls++;
+      }
+    });
+
+    const deliveryId = "del-uuid-unique-12345";
+    const payload = {
+      repository: { owner: { login: "testorg" }, name: "testrepo" },
+      action: "opened",
+      pull_request: { number: 7, head: { ref: "feature/test", sha: "sha777" } }
+    };
+    const { signature } = signPayload(payload);
+
+    // Mock prisma for webhookDelivery: first call is not duplicate, second call is duplicate
+    const deliveryStore = new Set();
+    prisma.webhookDelivery.findUnique = async ({ where }) => {
+      if (deliveryStore.has(where.deliveryId)) {
+        return { deliveryId: where.deliveryId, status: "PROCESSED" };
+      }
+      return null;
+    };
+    prisma.webhookDelivery.create = async ({ data }) => {
+      deliveryStore.add(data.deliveryId);
+      return { id: "wd_1", ...data };
+    };
+    prisma.webhookDelivery.update = async ({ where, data }) => ({
+      deliveryId: where.deliveryId,
+      ...data
+    });
+
+    // 1. First delivery
+    const res1 = await request(app)
+      .post("/webhooks/github")
+      .set("X-GitHub-Event", "pull_request")
+      .set("X-GitHub-Delivery", deliveryId)
+      .set("X-Hub-Signature-256", signature)
+      .send(payload);
+
+    assert.equal(res1.status, 200);
+    assert.equal(res1.text, "ok");
+    assert.equal(handlerCalls, 1);
+
+    // 2. Duplicate delivery with identical X-GitHub-Delivery
+    const res2 = await request(app)
+      .post("/webhooks/github")
+      .set("X-GitHub-Event", "pull_request")
+      .set("X-GitHub-Delivery", deliveryId)
+      .set("X-Hub-Signature-256", signature)
+      .send(payload);
+
+    assert.equal(res2.status, 200);
+    assert.equal(res2.text, "duplicate");
+    assert.equal(handlerCalls, 1, "Handler must NOT be executed for duplicate webhook delivery");
+  });
+
+  test("extracts immutable commitSha and passes it to onOpenOrSync handler", async () => {
+    prisma.project.findMany = async () => [mockProject];
+
+    let capturedArgs = null;
+    setPRHandlers({
+      onOpenOrSync: async (args) => {
+        capturedArgs = args;
+      }
+    });
+
+    const payload = {
+      repository: { owner: { login: "testorg" }, name: "testrepo" },
+      action: "synchronize",
+      pull_request: {
+        number: 88,
+        head: { ref: "feature/mutable-branch", sha: "immutable-sha-99999" }
+      }
+    };
+    const { signature } = signPayload(payload);
+
+    prisma.webhookDelivery.findUnique = async () => null;
+    prisma.webhookDelivery.create = async ({ data }) => ({ id: "wd_2", ...data });
+    prisma.webhookDelivery.update = async ({ where, data }) => ({ deliveryId: where.deliveryId, ...data });
+
+    const res = await request(app)
+      .post("/webhooks/github")
+      .set("X-GitHub-Event", "pull_request")
+      .set("X-GitHub-Delivery", "del-unique-sha-check")
+      .set("X-Hub-Signature-256", signature)
+      .send(payload);
+
+    assert.equal(res.status, 200);
+    assert.ok(capturedArgs);
+    assert.equal(capturedArgs.prNumber, 88);
+    assert.equal(capturedArgs.commitSha, "immutable-sha-99999");
+    assert.equal(capturedArgs.ref, "feature/mutable-branch");
+  });
 });

@@ -22,7 +22,7 @@ function emitStatus(previewId, userId, payload) {
  *
  * Creates/upserts a preview record and triggers buildPreview.
  */
-export async function handlePROpenOrSync({ project, prNumber, ref, cloner = cloneRepo, builder = buildPreview }) {
+export async function handlePROpenOrSync({ project, prNumber, ref, commitSha, cloner = cloneRepo, builder = buildPreview }) {
   const preview = await prisma.preview.upsert({
     where: { projectId_prNumber: { projectId: project.id, prNumber } },
     update: { status: "building" },
@@ -40,6 +40,7 @@ export async function handlePROpenOrSync({ project, prNumber, ref, cloner = clon
     repoOwner: project.repoOwner,
     repoName: project.repoName,
     ref,
+    commitSha,
     prNumber,
     accessToken: project.accessToken
   });
