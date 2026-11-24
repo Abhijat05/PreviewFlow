@@ -151,4 +151,39 @@ describe("4.1 Repository Service Unit Tests", () => {
     assert.ok(timer, "Timer must be created");
     clearInterval(timer);
   });
+
+  test("cloneRepo checks out exact commitSha when provided", async () => {
+    const tmpBase = path.join(process.cwd(), "tmp-builds");
+    if (!fs.existsSync(tmpBase)) fs.mkdirSync(tmpBase, { recursive: true });
+    const srcDir = fs.mkdtempSync(path.join(tmpBase, "git-src-"));
+    createdDirs.push(srcDir);
+    const git = simpleGit(srcDir);
+    await git.init();
+    await git.addConfig("user.name", "Test User");
+    await git.addConfig("user.email", "test@example.com");
+
+    fs.writeFileSync(path.join(srcDir, "file.txt"), "Version 1");
+    await git.add("file.txt");
+    const commit1 = await git.commit("Commit 1");
+    const sha1 = commit1.commit;
+
+    fs.writeFileSync(path.join(srcDir, "file.txt"), "Version 2");
+    await git.add("file.txt");
+    await git.commit("Commit 2");
+
+    const tempCloned = await cloneRepo({
+      repoOwner: "test",
+      repoName: "local",
+      commitSha: sha1,
+      cloneUrlOverride: srcDir
+    });
+    createdDirs.push(tempCloned);
+
+    const content = fs.readFileSync(path.join(tempCloned, "file.txt"), "utf8");
+    assert.equal(content, "Version 1");
+
+    const clonedGit = simpleGit(tempCloned);
+    const headLog = await clonedGit.log({ maxCount: 1 });
+    assert.equal(headLog.latest.hash, sha1);
+  });
 });

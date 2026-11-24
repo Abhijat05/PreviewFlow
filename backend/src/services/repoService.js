@@ -37,7 +37,7 @@ export function sanitizeGitError(err) {
  * Clones a repository and checks out the specific PR or branch ref.
  * Supports private repositories via accessToken.
  */
-export async function cloneRepo({ repoOwner, repoName, ref, prNumber, accessToken }) {
+export async function cloneRepo({ repoOwner, repoName, ref, commitSha, prNumber, accessToken, cloneUrlOverride }) {
   if (!repoOwner || !repoName || typeof repoOwner !== "string" || typeof repoName !== "string" || !repoOwner.trim() || !repoName.trim()) {
     throw new Error("Invalid repository coordinates: repoOwner and repoName are required.");
   }
@@ -47,7 +47,7 @@ export async function cloneRepo({ repoOwner, repoName, ref, prNumber, accessToke
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pr-build-"));
   const git = simpleGit();
 
-  const cloneUrl = buildCloneUrl({ repoOwner: cleanOwner, repoName: cleanRepo, accessToken });
+  const cloneUrl = cloneUrlOverride || buildCloneUrl({ repoOwner: cleanOwner, repoName: cleanRepo, accessToken });
 
   try {
     // Clone repository (depth 50 to allow PR branch fetch)
@@ -57,10 +57,16 @@ export async function cloneRepo({ repoOwner, repoName, ref, prNumber, accessToke
     if (prNumber) {
       try {
         await git.cwd(tempDir).fetch("origin", `pull/${prNumber}/head:pr-${prNumber}`);
-        await git.cwd(tempDir).checkout(`pr-${prNumber}`);
+        if (commitSha) {
+          await git.cwd(tempDir).checkout(commitSha);
+        } else {
+          await git.cwd(tempDir).checkout(`pr-${prNumber}`);
+        }
       } catch (prErr) {
-        // Fallback to checking out branch ref if PR ref fetch failed
-        if (ref) {
+        // Fallback to checking out commitSha or branch ref if PR ref fetch failed
+        if (commitSha) {
+          await git.cwd(tempDir).checkout(commitSha);
+        } else if (ref) {
           await git.cwd(tempDir).checkout(ref);
         } else {
           // Fallback to default branch (main or master) if PR ref does not exist on remote
@@ -75,6 +81,8 @@ export async function cloneRepo({ repoOwner, repoName, ref, prNumber, accessToke
           }
         }
       }
+    } else if (commitSha) {
+      await git.cwd(tempDir).checkout(commitSha);
     } else if (ref) {
       await git.cwd(tempDir).checkout(ref);
     }
