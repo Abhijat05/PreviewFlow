@@ -1,8 +1,16 @@
 // frontend/src/test/node20-polyfill.cjs
 /**
- * Polyfill for Node.js 20 environments where node:zlib lacks createZstdDecompress.
- * Undici's decompress.js unconditionally binds createZstdDecompress, crashing on Node <= 20.
+ * Polyfills for Node.js <= 20 environments:
+ * 1. node:worker_threads.markAsUncloneable (added in Node 21) - required by Undici v8 / JSDOM.
+ * 2. node:zlib.createZstdDecompress (added in Node 22) - required by Undici decompress.
  */
+const workerThreads = require("node:worker_threads");
+if (typeof workerThreads.markAsUncloneable !== "function") {
+  workerThreads.markAsUncloneable = function (obj) {
+    return obj;
+  };
+}
+
 const zlib = require("node:zlib");
 const { PassThrough } = require("node:stream");
 
