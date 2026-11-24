@@ -27,24 +27,32 @@ export async function claimNextJob(
   }
 
   // Atomically select and update the next queued job
-  const rows = await client.$queryRaw`
-    WITH next_job AS (
-      SELECT id
-      FROM "Build"
-      WHERE status = 'QUEUED'
-      ORDER BY "queuedAt" ASC
-      LIMIT 1
-      FOR UPDATE SKIP LOCKED
-    )
-    UPDATE "Build" b
-    SET status = 'RUNNING',
-        "workerId" = ${workerId},
-        "startedAt" = NOW(),
-        "leaseExpiresAt" = NOW() + (${leaseDurationSeconds} || ' seconds')::INTERVAL
-    FROM next_job
-    WHERE b.id = next_job.id
-    RETURNING b.*;
-  `;
+  let rows;
+  try {
+    rows = await client.$queryRaw`
+      WITH next_job AS (
+        SELECT id
+        FROM "Build"
+        WHERE status = 'QUEUED'
+        ORDER BY "queuedAt" ASC
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE "Build" b
+      SET status = 'RUNNING',
+          "workerId" = ${workerId},
+          "startedAt" = NOW(),
+          "leaseExpiresAt" = NOW() + (${leaseDurationSeconds} || ' seconds')::INTERVAL
+      FROM next_job
+      WHERE b.id = next_job.id
+      RETURNING b.*;
+    `;
+  } catch (err) {
+    if (err.code === "P2021" || err.message?.includes("does not exist")) {
+      return null;
+    }
+    throw err;
+  }
 
   if (!rows || rows.length === 0) {
     return null;
@@ -114,9 +122,22 @@ export async function recoverStaleLeases({ client = defaultPrisma } = {}) {
   const now = new Date();
 
   // Find RUNNING builds whose lease has expired
-  const runningBuilds = await client.build.findMany({
-    where: { status: "RUNNING" }
-  });
+  let runningBuilds;
+  try {
+    runningBuilds = await client.build.findMany({
+      where: { status: "RUNNING" }
+    });
+  } catch (err) {
+    if (err.code === "P2021" || err.message?.includes("does not exist")) {
+      return {
+        recoveredCount: 0,
+        failedCount: 0,
+        recoveredBuildIds: [],
+        unmigrated: true
+      };
+    }
+    throw err;
+  }
 
   const staleBuilds = runningBuilds.filter(
     (b) => b.leaseExpiresAt && new Date(b.leaseExpiresAt).getTime() < now.getTime()
@@ -186,13 +207,24 @@ export function createWorkerLoop({
   let pollTimer = null;
   let currentHeartbeat = null;
   let currentAbortController = null;
+  let hasWarnedUnmigrated = false;
 
   async function poll() {
     if (!running) return;
 
     try {
       // 1. Check and recover stale leases from dead workers
-      await recoverStaleLeases({ client });
+      const staleReport = await recoverStaleLeases({ client });
+      if (staleReport.unmigrated) {
+        if (!hasWarnedUnmigrated) {
+          hasWarnedUnmigrated = true;
+          console.warn(
+            `[BuildWorker] Warning: Table "Build" does not exist in database. Build worker will pause until migrations are applied ('npx prisma db push').`
+          );
+        }
+        return;
+      }
+      hasWarnedUnmigrated = false;
 
       // 2. Claim next available job
       const job = await claimNextJob(workerId, { leaseDurationSeconds, client });

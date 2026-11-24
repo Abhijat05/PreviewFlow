@@ -185,6 +185,19 @@ describe("buildWorker Unit Tests", () => {
     assert.equal(previewUpdated.status, "failed");
   });
 
+  test("recoverStaleLeases returns unmigrated: true when Build table does not exist", async () => {
+    prisma.build.findMany = async () => {
+      const err = new Error("The table `public.Build` does not exist in the current database.");
+      err.code = "P2021";
+      throw err;
+    };
+
+    const report = await recoverStaleLeases();
+    assert.equal(report.unmigrated, true);
+    assert.equal(report.recoveredCount, 0);
+    assert.equal(report.failedCount, 0);
+  });
+
   test("createWorkerLoop processes a claimed job and stops cleanly", async () => {
     let jobExecuted = false;
     let executedJobId = null;
