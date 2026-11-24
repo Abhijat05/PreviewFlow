@@ -32,6 +32,14 @@ enum BuildSource {
   DEV_SIMULATION
 }
 
+enum WebhookStatus {
+  RECEIVED
+  PROCESSED
+  IGNORED
+  FAILED
+  DUPLICATE
+}
+
 model User {
   id        String    @id @default(cuid())
   githubId  String    @unique
@@ -51,7 +59,8 @@ model Project {
   webhookSecret String
   accessToken   String?
   webhookId     String?
-  previews      Preview[] @relation("ProjectPreviews")
+  previews      Preview[]         @relation("ProjectPreviews")
+  webhookDeliveries WebhookDelivery[] @relation("ProjectWebhookDeliveries")
 
   @@index([userId])
   @@index([repoOwner, repoName])
@@ -133,4 +142,23 @@ model PreviewMetric {
   createdAt DateTime @default(now())
 
   @@index([previewId, createdAt])
+}
+
+model WebhookDelivery {
+  id           String        @id @default(cuid())
+  deliveryId   String        @unique
+  eventType    String
+  action       String?
+  projectId    String?
+  project      Project?      @relation("ProjectWebhookDeliveries", fields: [projectId], references: [id], onDelete: SetNull)
+  prNumber     Int?
+  commitSha    String?
+  status       WebhookStatus @default(RECEIVED)
+  receivedAt   DateTime      @default(now())
+  processedAt  DateTime?
+  errorMessage String?
+
+  @@index([deliveryId])
+  @@index([projectId, prNumber])
+  @@index([receivedAt])
 }
