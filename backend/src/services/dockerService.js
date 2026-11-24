@@ -387,6 +387,10 @@ export async function buildPreview({ project, previewId, repoPath, prNumber }) {
       "--cpus", "1.0",
       "--security-opt", "no-new-privileges",
       "--cap-drop", "ALL",
+      "--cap-add", "CHOWN",
+      "--cap-add", "SETUID",
+      "--cap-add", "SETGID",
+      "--cap-add", "NET_BIND_SERVICE",
       "-p", `127.0.0.1:${assignedPort}:${containerPort}`,
       imageName
     ];
