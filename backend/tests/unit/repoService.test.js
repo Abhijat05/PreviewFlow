@@ -186,4 +186,32 @@ describe("4.1 Repository Service Unit Tests", () => {
     const headLog = await clonedGit.log({ maxCount: 1 });
     assert.equal(headLog.latest.hash, sha1);
   });
+
+  test("cloneRepo rejects immediately with AbortError when signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await assert.rejects(
+      async () =>
+        cloneRepo({
+          repoOwner: "test",
+          repoName: "local",
+          abortSignal: controller.signal
+        }),
+      (err) => {
+        assert.equal(err.isAborted, true);
+        assert.equal(err.name, "AbortError");
+        return true;
+      }
+    );
+  });
+
+  test("sanitizeGitError preserves TimeoutError metadata when present", () => {
+    const raw = new Error("fatal: unable to access https://x-access-token:secret@github.com/o/r.git");
+    raw.isTimeout = true;
+    const sanitized = sanitizeGitError(raw);
+    assert.equal(sanitized.isTimeout, true);
+    assert.equal(sanitized.name, "TimeoutError");
+    assert.doesNotMatch(sanitized.message, /secret/);
+  });
 });

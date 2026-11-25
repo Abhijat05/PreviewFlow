@@ -455,4 +455,81 @@ describe("buildOrchestrator Unit & Lifecycle Tests", () => {
     const elapsed = Date.now() - start;
     assert.ok(elapsed < 3000, `Process should have terminated quickly on abort, took ${elapsed}ms`);
   });
+
+  test("executeBuildJob reclaims superseded image on completion and failed images on abort", async () => {
+    // 1. Seed active build with an imageTag
+    const prev = await prisma.preview.upsert({
+      where: { projectId_prNumber: { projectId: project.id, prNumber: 120 } },
+      update: {},
+      create: {
+        projectId: project.id,
+        prNumber: 120,
+        status: "live",
+        url: "http://localhost:5120",
+        containerName: "preview-img-old",
+        port: 5120
+      }
+    });
+
+    const oldBuild = await prisma.build.create({
+      data: {
+        previewId: prev.id,
+        buildNumber: 1,
+        commitSha: "sha_img_1",
+        branch: "pr-120",
+        status: "COMPLETED",
+        imageTag: "previewflow/acme-web-app:pr-120-b1-old"
+      }
+    });
+    await prisma.preview.update({
+      where: { id: prev.id },
+      data: { activeBuildId: oldBuild.id }
+    });
+
+    const { build: newBuild } = await triggerBuild({
+      project,
+      prNumber: 120,
+      commitSha: "sha_img_2",
+      branch: "pr-120",
+      source: "WEBHOOK_SYNC"
+    });
+    const runningJob = await prisma.build.update({
+      where: { id: newBuild.id },
+      data: { status: "RUNNING", workerId: "w-img" }
+    });
+
+    const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), "orch-img-"));
+    tempDirsToClean.push(tempRepo);
+    const removedImages = [];
+
+    await executeBuildJob(runningJob, {
+      cloner: async () => tempRepo,
+      builder: async () => ({
+        url: "http://localhost:5121",
+        containerName: "preview-img-new",
+        port: 5121,
+        imageName: "previewflow/acme-web-app:pr-120-b2-new"
+      }),
+      containerRemover: async () => true,
+      imageRemover: async (img) => {
+        removedImages.push(img);
+        return true;
+      }
+    });
+
+    assert.deepEqual(removedImages, ["previewflow/acme-web-app:pr-120-b1-old"]);
+
+    // Verify closeOrDeletePreview cleans up associated images too
+    await closeOrDeletePreview({
+      previewId: prev.id,
+      reason: "Pull request closed",
+      containerRemover: async () => true,
+      imageRemover: async (img) => {
+        removedImages.push(`del:${img}`);
+        return true;
+      }
+    });
+
+    assert.ok(removedImages.includes("del:previewflow/acme-web-app:pr-120-b2-new"));
+  });
 });

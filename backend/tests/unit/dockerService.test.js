@@ -2,9 +2,18 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import net from "net";
+import http from "http";
 import {
   generateContainerName,
+  generateImageTag,
+  resolveContainerResourceLimits,
+  buildContainerLabels,
+  buildRunArgs,
   removeContainer,
+  removeImage,
+  isValidImageReference,
+  pruneStalePreviewImages,
+  waitForContainerReady,
   isPortFree,
   portReservedInDB,
   findAvailablePort,
@@ -169,5 +178,202 @@ describe("4.2 Docker Service Unit Tests", () => {
     );
 
     assert.ok(logs.some((l) => l.includes("fatal error") || l.includes("Process Error")));
+  });
+
+  test("runCommand terminates child process on timeoutMs and throws TimeoutError", async () => {
+    const start = Date.now();
+    await assert.rejects(
+      async () => {
+        await runCommand(
+          process.execPath,
+          ["-e", "setTimeout(() => {}, 10000);"],
+          () => {},
+          { timeoutMs: 80 }
+        );
+      },
+      (err) => {
+        assert.equal(err.isTimeout, true);
+        assert.equal(err.name, "TimeoutError");
+        assert.match(err.message, /timed out/i);
+        return true;
+      }
+    );
+
+    assert.ok(Date.now() - start < 3000);
+  });
+
+  test("generateImageTag formats standardized lowercase tag with short SHA", () => {
+    const tag = generateImageTag(
+      { repoOwner: "Acme-Org", repoName: "My_Web.App" },
+      42,
+      3,
+      "a1b2c3d4e5f67890"
+    );
+    assert.equal(tag, "previewflow/acme-org-my_web.app:pr-42-b3-a1b2c3d");
+
+    const tagNoSha = generateImageTag({ repoOwner: "Org", repoName: "App" }, 7, 1, "pr-head");
+    assert.equal(tagNoSha, "previewflow/org-app:pr-7-b1");
+  });
+
+  test("resolveContainerResourceLimits scales safely by user tier", () => {
+    assert.deepEqual(resolveContainerResourceLimits("FREE"), {
+      memory: "512m",
+      memorySwap: "512m",
+      cpus: "1.0",
+      pidsLimit: "100"
+    });
+    assert.deepEqual(resolveContainerResourceLimits("PRO"), {
+      memory: "1024m",
+      memorySwap: "1024m",
+      cpus: "1.5",
+      pidsLimit: "150"
+    });
+    assert.deepEqual(resolveContainerResourceLimits("ENTERPRISE"), {
+      memory: "2048m",
+      memorySwap: "2048m",
+      cpus: "2.0",
+      pidsLimit: "250"
+    });
+  });
+
+  test("buildContainerLabels and buildRunArgs include required tracing labels, caps, and security options", () => {
+    const labels = buildContainerLabels({
+      previewId: "prev_1",
+      buildId: "build_99",
+      projectId: "proj_2",
+      prNumber: 12,
+      buildNumber: 4,
+      commitSha: "deadbeef1234",
+      port: 5055
+    });
+
+    const args = buildRunArgs({
+      containerName: "preview-pproj_2-pr12-b4",
+      assignedPort: 5055,
+      containerPort: 80,
+      imageName: "previewflow/acme-app:pr-12-b4-deadbee",
+      tier: "PRO",
+      labels
+    });
+
+    assert.ok(args.includes("previewflow.managed=true"));
+    assert.ok(args.includes("previewflow.previewId=prev_1"));
+    assert.ok(args.includes("previewflow.buildId=build_99"));
+    assert.ok(args.includes("previewflow.commitSha=deadbeef1234"));
+    assert.ok(args.includes("--memory"));
+    assert.ok(args.includes("1024m"));
+    assert.ok(args.includes("--cap-add"));
+    assert.ok(args.includes("NET_BIND_SERVICE"));
+    assert.ok(args.includes("127.0.0.1:5055:80"));
+  });
+
+  test("waitForContainerReady resolves once HTTP endpoint starts responding", async () => {
+    let probeReady = false;
+    const server = http.createServer((req, res) => {
+      if (!probeReady) {
+        res.destroy();
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("ok");
+    });
+
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = server.address().port;
+
+    setTimeout(() => {
+      probeReady = true;
+    }, 60);
+
+    try {
+      const res = await waitForContainerReady({
+        port,
+        containerName: "preview-ready-test",
+        timeoutMs: 2000,
+        intervalMs: 30,
+        inspectFn: async () => ({ status: "running", running: true, exitCode: 0 })
+      });
+
+      assert.equal(res.ready, true);
+      assert.equal(res.status, 200);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  test("waitForContainerReady fails fast if container exits prematurely", async () => {
+    await assert.rejects(
+      async () => {
+        await waitForContainerReady({
+          port: 5999,
+          containerName: "preview-crashed-test",
+          timeoutMs: 5000,
+          intervalMs: 50,
+          inspectFn: async () => ({ status: "exited", running: false, exitCode: 137 }),
+          probeFn: async () => ({ ok: false })
+        });
+      },
+      (err) => {
+        assert.match(err.message, /exited unexpectedly.*exit code 137/i);
+        return true;
+      }
+    );
+  });
+
+  test("waitForContainerReady throws TimeoutError when container never responds", async () => {
+    await assert.rejects(
+      async () => {
+        await waitForContainerReady({
+          port: 5998,
+          containerName: "preview-timeout-test",
+          timeoutMs: 80,
+          intervalMs: 20,
+          inspectFn: async () => ({ status: "running", running: true, exitCode: 0 }),
+          probeFn: async () => ({ ok: false, error: "ECONNREFUSED" })
+        });
+      },
+      (err) => {
+        assert.equal(err.isTimeout, true);
+        assert.equal(err.name, "TimeoutError");
+        assert.match(err.message, /timed out/i);
+        return true;
+      }
+    );
+  });
+
+  test("removeImage validates references and pruneStalePreviewImages skips active or recent images", async () => {
+    assert.equal(isValidImageReference("previewflow/org-app:pr-1-b1"), true);
+    assert.equal(isValidImageReference("img; rm -rf /"), false);
+    assert.equal(await removeImage("img && whoami"), false);
+
+    const oldDate = new Date(Date.now() - 200 * 60 * 60 * 1000).toISOString();
+    const recentDate = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const removedCalls = [];
+
+    const result = await pruneStalePreviewImages({
+      maxAgeHours: 168,
+      activeImageTags: new Set(["previewflow/org-app:pr-1-b1-active"]),
+      execFn: async (bin, args) => {
+        if (args[0] === "images") {
+          return {
+            err: null,
+            stdout: [
+              `previewflow/org-app:pr-1-b1-active|${oldDate}`,
+              `previewflow/org-app:pr-2-b1-stale|${oldDate}`,
+              `previewflow/org-app:pr-3-b1-fresh|${recentDate}`
+            ].join("\n")
+          };
+        }
+        if (args[0] === "rmi") {
+          removedCalls.push(args[2]);
+          return { err: null, stdout: "" };
+        }
+        return { err: null, stdout: "" };
+      }
+    });
+
+    assert.deepEqual(result.removedImages, ["previewflow/org-app:pr-2-b1-stale"]);
+    assert.deepEqual(removedCalls, ["previewflow/org-app:pr-2-b1-stale"]);
+    assert.equal(result.skippedCount, 2);
   });
 });
