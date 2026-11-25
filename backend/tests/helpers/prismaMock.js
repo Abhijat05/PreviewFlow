@@ -14,6 +14,7 @@ export function mockPrisma(overrides = {}) {
     "findMany",
     "create",
     "update",
+    "updateMany",
     "upsert",
     "delete",
     "deleteMany",

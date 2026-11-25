@@ -327,4 +327,101 @@ describe("5.2 GitHub Webhook API Integration Tests", () => {
     assert.equal(capturedArgs.commitSha, "immutable-sha-99999");
     assert.equal(capturedArgs.ref, "feature/mutable-branch");
   });
+
+  test("webhook default orchestrator enqueues durable build without blocking and supersedes prior queued build", async () => {
+    const origMockBuildFindMany = prisma.build.findMany;
+    const origMockBuildFindFirst = prisma.build.findFirst;
+    const origMockBuildCreate = prisma.build.create;
+    const origMockBuildUpdateMany = prisma.build.updateMany;
+    const origMockPreviewUpsert = prisma.preview.upsert;
+    const origMockPreviewUpdate = prisma.preview.update;
+    const origMockWdFindUnique = prisma.webhookDelivery.findUnique;
+    const origMockWdCreate = prisma.webhookDelivery.create;
+    const origMockWdUpdate = prisma.webhookDelivery.update;
+
+    try {
+      prisma.project.findMany = async () => [mockProject];
+      prisma.webhookDelivery.findUnique = async () => null;
+      prisma.webhookDelivery.create = async ({ data }) => ({ id: "wd_q1", ...data });
+      prisma.webhookDelivery.update = async ({ where, data }) => ({ deliveryId: where.deliveryId, ...data });
+
+      const enqueuedBuilds = [];
+      let supersedeCount = 0;
+
+      prisma.preview.upsert = async ({ create }) => ({
+        id: "prev_webhook_queue_1",
+        ...create
+      });
+      prisma.preview.update = async ({ where, data }) => ({ id: where.id, ...data });
+      prisma.build.findMany = async () => [];
+      prisma.build.findFirst = async () =>
+        enqueuedBuilds.length ? enqueuedBuilds[enqueuedBuilds.length - 1] : null;
+      prisma.build.updateMany = async ({ data }) => {
+        if (data.status === "SUPERSEDED") supersedeCount++;
+        return { count: 1 };
+      };
+      prisma.build.create = async ({ data }) => {
+        const b = { id: `build_q_${enqueuedBuilds.length + 1}`, ...data };
+        enqueuedBuilds.push(b);
+        return b;
+      };
+
+      const payload1 = {
+        repository: { owner: { login: "testorg" }, name: "testrepo" },
+        action: "opened",
+        pull_request: {
+          number: 51,
+          title: "First commit",
+          head: { ref: "feat/fast-webhook", sha: "sha_1111" }
+        }
+      };
+      const sig1 = signPayload(payload1).signature;
+
+      const res1 = await request(app)
+        .post("/webhooks/github")
+        .set("X-GitHub-Event", "pull_request")
+        .set("X-GitHub-Delivery", "del-async-1")
+        .set("X-Hub-Signature-256", sig1)
+        .send(payload1);
+
+      assert.equal(res1.status, 200);
+      assert.equal(res1.text, "ok");
+
+      const payload2 = {
+        repository: { owner: { login: "testorg" }, name: "testrepo" },
+        action: "synchronize",
+        pull_request: {
+          number: 51,
+          title: "Second commit",
+          head: { ref: "feat/fast-webhook", sha: "sha_2222" }
+        }
+      };
+      const sig2 = signPayload(payload2).signature;
+
+      const res2 = await request(app)
+        .post("/webhooks/github")
+        .set("X-GitHub-Event", "pull_request")
+        .set("X-GitHub-Delivery", "del-async-2")
+        .set("X-Hub-Signature-256", sig2)
+        .send(payload2);
+
+      assert.equal(res2.status, 200);
+      assert.equal(enqueuedBuilds.length, 2);
+      assert.equal(enqueuedBuilds[0].source, "WEBHOOK_OPEN");
+      assert.equal(enqueuedBuilds[0].commitSha, "sha_1111");
+      assert.equal(enqueuedBuilds[1].source, "WEBHOOK_SYNC");
+      assert.equal(enqueuedBuilds[1].commitSha, "sha_2222");
+      assert.equal(supersedeCount, 2);
+    } finally {
+      prisma.build.findMany = origMockBuildFindMany;
+      prisma.build.findFirst = origMockBuildFindFirst;
+      prisma.build.create = origMockBuildCreate;
+      prisma.build.updateMany = origMockBuildUpdateMany;
+      prisma.preview.upsert = origMockPreviewUpsert;
+      prisma.preview.update = origMockPreviewUpdate;
+      prisma.webhookDelivery.findUnique = origMockWdFindUnique;
+      prisma.webhookDelivery.create = origMockWdCreate;
+      prisma.webhookDelivery.update = origMockWdUpdate;
+    }
+  });
 });

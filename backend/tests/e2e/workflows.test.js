@@ -25,6 +25,8 @@ describe("9. Critical End-to-End Workflow Tests", () => {
   let originalFindManyProject;
   let originalUpdatePreview;
   let originalUpsertPreview;
+  let originalBuildFindMany;
+  let originalBuildUpdate;
 
   const testUserId = "user_e2e_owner";
   const testUserToken = generateTestToken({ userId: testUserId, tier: "PRO" });
@@ -70,6 +72,11 @@ describe("9. Critical End-to-End Workflow Tests", () => {
     originalFindManyProject = prisma.project.findMany;
     originalUpdatePreview = prisma.preview.update;
     originalUpsertPreview = prisma.preview.upsert;
+    originalBuildFindMany = prisma.build.findMany;
+    originalBuildUpdate = prisma.build.update;
+
+    prisma.build.findMany = async () => [];
+    prisma.build.update = async ({ where, data }) => ({ id: where.id, ...data });
 
     prisma.user.findUnique = async ({ where }) => ({
       id: where.id,
@@ -87,6 +94,8 @@ describe("9. Critical End-to-End Workflow Tests", () => {
     prisma.project.findMany = originalFindManyProject;
     prisma.preview.update = originalUpdatePreview;
     prisma.preview.upsert = originalUpsertPreview;
+    prisma.build.findMany = originalBuildFindMany;
+    prisma.build.update = originalBuildUpdate;
     setPRHandlers();
   });
 
