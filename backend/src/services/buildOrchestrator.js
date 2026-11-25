@@ -3,7 +3,7 @@ import fs from "fs";
 import { prisma as defaultPrisma } from "../db.js";
 import { getIO } from "../socket.js";
 import { cloneRepo } from "./repoService.js";
-import { buildPreview, removeContainer, releasePortInMemory } from "./dockerService.js";
+import { buildPreview, removeContainer, removeImage, releasePortInMemory } from "./dockerService.js";
 import { enqueueBuild, TERMINAL_BUILD_STATUSES } from "./buildQueueService.js";
 
 /**
@@ -308,6 +308,7 @@ export async function executeBuildJob(
     cloner = cloneRepo,
     builder = buildPreview,
     containerRemover = removeContainer,
+    imageRemover = removeImage,
     client = defaultPrisma
   } = {}
 ) {
@@ -318,6 +319,7 @@ export async function executeBuildJob(
   const { controller, cleanup } = createLinkedController(job.id, externalSignal);
   let repoPath = null;
   let builtContainerName = null;
+  let builtImageName = null;
   let allocatedPort = null;
   let committedSwitch = false;
   let previewContext = null;
@@ -335,6 +337,10 @@ export async function executeBuildJob(
 
     const project = previewContext.project;
     const previousContainerName = previewContext.containerName || null;
+    const previousActiveBuild = previewContext.activeBuildId
+      ? await client.build.findUnique({ where: { id: previewContext.activeBuildId } }).catch(() => null)
+      : null;
+    const previousImageTag = previousActiveBuild?.imageTag || null;
 
     // Gate 1: Verify build is still active before cloning
     await assertJobCanContinue(job.id, previewContext.id, controller.signal, client);
@@ -363,13 +369,14 @@ export async function executeBuildJob(
     // Gate 2: Verify build wasn't superseded or cancelled during git clone
     await assertJobCanContinue(job.id, previewContext.id, controller.signal, client);
 
-    // Stage 2: Build image and start container
+    // Stage 2: Build image, enforce resource limits, run container, and execute readiness probe
     const rawResult = await builder({
       project,
       previewId: previewContext.id,
       repoPath,
       prNumber: previewContext.prNumber,
       buildNumber: job.buildNumber,
+      buildId: job.id,
       commitSha: job.commitSha,
       abortSignal: controller.signal,
       managedByOrchestrator: true
@@ -381,6 +388,7 @@ export async function executeBuildJob(
         : rawResult || {};
 
     builtContainerName = buildResult.containerName || null;
+    builtImageName = buildResult.imageName || null;
     allocatedPort = buildResult.port || null;
 
     // Gate 3 (Late Completion Guard): Verify build still owns latestBuildId before switching deployment
@@ -396,7 +404,7 @@ export async function executeBuildJob(
         completedAt,
         containerName: builtContainerName,
         port: allocatedPort,
-        imageTag: buildResult.imageName || null,
+        imageTag: builtImageName,
         buildLogs: buildResult.logs || null
       }
     });
@@ -430,11 +438,14 @@ export async function executeBuildJob(
       releasePortInMemory(allocatedPort);
     }
 
-    // Decommission old container if a new container replaced it
+    // Decommission old container & superseded image if a new container/image replaced them
     if (previousContainerName && builtContainerName && previousContainerName !== builtContainerName) {
       await containerRemover(previousContainerName).catch((err) => {
         console.warn(`Failed to remove superseded container ${previousContainerName}:`, err?.message || err);
       });
+    }
+    if (previousImageTag && builtImageName && previousImageTag !== builtImageName) {
+      await imageRemover(previousImageTag).catch(() => {});
     }
 
     emitPreviewStatus(previewContext.id, project.userId, {
@@ -457,9 +468,12 @@ export async function executeBuildJob(
       port: allocatedPort
     };
   } catch (err) {
-    // Cleanup newly spun-up container if switch was aborted or failed before activation
+    // Cleanup newly spun-up container & uncommitted image if switch was aborted or failed before activation
     if (builtContainerName && !committedSwitch) {
       await containerRemover(builtContainerName).catch(() => {});
+    }
+    if (builtImageName && !committedSwitch) {
+      await imageRemover(builtImageName, { force: true }).catch(() => {});
     }
     if (allocatedPort && !committedSwitch) {
       releasePortInMemory(allocatedPort);
@@ -704,6 +718,7 @@ export async function closeOrDeletePreview({
   prNumber = null,
   reason = "Preview deleted",
   containerRemover = removeContainer,
+  imageRemover = removeImage,
   userId = null,
   client = defaultPrisma
 }) {
@@ -718,8 +733,9 @@ export async function closeOrDeletePreview({
   const targetProject = project || preview.project;
   const ownerId = userId || targetProject?.userId;
 
-  // 1. Cancel any active/queued builds for this preview so worker stops cleanly
+  // 1. Cancel any active/queued builds for this preview and collect containers/images to tear down
   const containersToRemove = new Set();
+  const imagesToRemove = new Set();
   if (preview.containerName) {
     containersToRemove.add(preview.containerName);
   }
@@ -732,6 +748,9 @@ export async function closeOrDeletePreview({
     for (const b of builds || []) {
       if (b.containerName) {
         containersToRemove.add(b.containerName);
+      }
+      if (b.imageTag) {
+        imagesToRemove.add(b.imageTag);
       }
       if (!TERMINAL_BUILD_STATUSES.has(b.status)) {
         await client.build.update({
@@ -746,7 +765,6 @@ export async function closeOrDeletePreview({
       }
     }
   } catch (err) {
-    // Allow graceful fallback if Build table is not present or mocked minimally
     if (err?.code !== "P2021") {
       console.warn("Build cancellation during preview teardown warning:", err?.message || err);
     }
@@ -759,6 +777,11 @@ export async function closeOrDeletePreview({
     } catch (e) {
       console.warn("Failed to remove container on teardown:", e?.message || e);
     }
+  }
+
+  // 3. Reclaim Docker images built specifically for this preview
+  for (const imageTag of imagesToRemove) {
+    await imageRemover(imageTag).catch(() => {});
   }
 
   // 3. Mark preview deleted in database

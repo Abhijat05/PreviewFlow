@@ -4,6 +4,8 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 
+export const DEFAULT_GIT_CLONE_TIMEOUT_MS = Number(process.env.GIT_CLONE_TIMEOUT_MS) || 60_000;
+
 /**
  * Builds a secure clone URL with optional token authentication for private repos.
  */
@@ -29,13 +31,19 @@ export function sanitizeGitError(err) {
     "https://***@github.com"
   );
   const sanitized = new Error(msg);
-  sanitized.stack = err.stack ? err.stack.replace(/https:\/\/[^@\s]+@github\.com/gi, "https://***@github.com") : undefined;
+  sanitized.stack = err.stack
+    ? err.stack.replace(/https:\/\/[^@\s]+@github\.com/gi, "https://***@github.com")
+    : undefined;
+  if (err.isTimeout) {
+    sanitized.isTimeout = true;
+    sanitized.name = "TimeoutError";
+  }
   return sanitized;
 }
 
 /**
  * Clones a repository and checks out the specific PR or branch ref.
- * Supports private repositories via accessToken and cooperative AbortSignal.
+ * Supports private repositories via accessToken, cooperative AbortSignal, and execution timeouts.
  */
 export async function cloneRepo({
   repoOwner,
@@ -45,9 +53,17 @@ export async function cloneRepo({
   prNumber,
   accessToken,
   cloneUrlOverride,
-  abortSignal
+  abortSignal,
+  timeoutMs = DEFAULT_GIT_CLONE_TIMEOUT_MS
 }) {
-  if (!repoOwner || !repoName || typeof repoOwner !== "string" || typeof repoName !== "string" || !repoOwner.trim() || !repoName.trim()) {
+  if (
+    !repoOwner ||
+    !repoName ||
+    typeof repoOwner !== "string" ||
+    typeof repoName !== "string" ||
+    !repoOwner.trim() ||
+    !repoName.trim()
+  ) {
     throw new Error("Invalid repository coordinates: repoOwner and repoName are required.");
   }
 
@@ -67,19 +83,50 @@ export async function cloneRepo({
   const cleanOwner = repoOwner.trim();
   const cleanRepo = repoName.trim();
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pr-build-"));
-  const git = simpleGit();
 
-  const cloneUrl = cloneUrlOverride || buildCloneUrl({ repoOwner: cleanOwner, repoName: cleanRepo, accessToken });
+  const compositeController = new AbortController();
+  let timedOut = false;
+  let timeoutTimer = null;
+
+  const onExternalAbort = () => {
+    compositeController.abort();
+  };
+
+  if (abortSignal) {
+    abortSignal.addEventListener("abort", onExternalAbort, { once: true });
+  }
+
+  if (timeoutMs && timeoutMs > 0) {
+    timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      compositeController.abort();
+    }, timeoutMs);
+    if (timeoutTimer.unref) timeoutTimer.unref();
+  }
+
+  const git = simpleGit({
+    abort: compositeController.signal,
+    ...(timeoutMs > 0 ? { timeout: { block: timeoutMs } } : {})
+  });
+
+  const cloneUrl =
+    cloneUrlOverride || buildCloneUrl({ repoOwner: cleanOwner, repoName: cleanRepo, accessToken });
 
   try {
     // Clone repository (depth 50 to allow PR branch fetch)
     await git.clone(cloneUrl, tempDir, ["--depth", "50"]);
 
-    if (abortSignal?.aborted) {
-      const err = new Error("Clone aborted after git clone");
-      err.name = "AbortError";
-      err.isAborted = true;
-      throw err;
+    if (compositeController.signal.aborted) {
+      if (timedOut) {
+        const timeoutErr = new Error(`Git clone timed out after ${timeoutMs}ms`);
+        timeoutErr.name = "TimeoutError";
+        timeoutErr.isTimeout = true;
+        throw timeoutErr;
+      }
+      const abortErr = new Error("Clone aborted after git clone");
+      abortErr.name = "AbortError";
+      abortErr.isAborted = true;
+      throw abortErr;
     }
 
     // If prNumber is provided, fetch pull request head directly (works for forks & cross-repo PRs)
@@ -92,6 +139,9 @@ export async function cloneRepo({
           await git.cwd(tempDir).checkout(`pr-${prNumber}`);
         }
       } catch (prErr) {
+        if (timedOut || abortSignal?.aborted) {
+          throw prErr;
+        }
         // Fallback to checking out commitSha or branch ref if PR ref fetch failed
         if (hasPinnedSha) {
           await git.cwd(tempDir).checkout(commitSha.trim());
@@ -116,11 +166,17 @@ export async function cloneRepo({
       await git.cwd(tempDir).checkout(ref);
     }
 
-    if (abortSignal?.aborted) {
-      const err = new Error("Clone aborted after checkout");
-      err.name = "AbortError";
-      err.isAborted = true;
-      throw err;
+    if (compositeController.signal.aborted) {
+      if (timedOut) {
+        const timeoutErr = new Error(`Git checkout timed out after ${timeoutMs}ms`);
+        timeoutErr.name = "TimeoutError";
+        timeoutErr.isTimeout = true;
+        throw timeoutErr;
+      }
+      const abortErr = new Error("Clone aborted after checkout");
+      abortErr.name = "AbortError";
+      abortErr.isAborted = true;
+      throw abortErr;
     }
 
     // Security: Reset origin remote URL to remove token from local .git/config on disk
@@ -135,16 +191,29 @@ export async function cloneRepo({
 
     return tempDir;
   } catch (err) {
-    // Cleanup temp directory immediately if clone fails or is aborted
+    // Cleanup temp directory immediately if clone fails, times out, or is aborted
     try {
       fs.rmSync(tempDir, { recursive: true, force: true });
     } catch {}
 
-    if (err?.isAborted || err?.name === "AbortError") {
-      throw err;
+    if (timedOut) {
+      const timeoutErr = new Error(`Git operation timed out after ${timeoutMs}ms`);
+      timeoutErr.name = "TimeoutError";
+      timeoutErr.isTimeout = true;
+      throw timeoutErr;
+    }
+
+    if (err?.isAborted || err?.name === "AbortError" || abortSignal?.aborted) {
+      const abortErr = new Error(err?.message || "Clone aborted");
+      abortErr.name = "AbortError";
+      abortErr.isAborted = true;
+      throw abortErr;
     }
 
     throw sanitizeGitError(err);
+  } finally {
+    if (timeoutTimer) clearTimeout(timeoutTimer);
+    if (abortSignal) abortSignal.removeEventListener("abort", onExternalAbort);
   }
 }
 

@@ -24,6 +24,7 @@ import { startStatsWorker } from "./services/statsWorker.js";
 import previewMetricsRoutes from "./routes/previewMetrics.js";
 import devSim from "./routes/devSimulate.js"; // Development simulation routes
 import { startPeriodicDiskCleanup } from "./services/repoService.js";
+import { startPeriodicDockerCleanup } from "./services/dockerService.js";
 import { createWorkerLoop } from "./services/buildWorker.js";
 import { executeBuildJob } from "./services/buildOrchestrator.js";
 
@@ -147,6 +148,7 @@ if (!isTest) {
   }
 
   if (shouldRunWorker) {
+    startPeriodicDockerCleanup();
     buildWorkerInstance = createWorkerLoop({
       pollIntervalMs: Number(process.env.BUILD_POLL_INTERVAL_MS) || 2000,
       leaseDurationSeconds: Number(process.env.BUILD_LEASE_SECONDS) || 60,
