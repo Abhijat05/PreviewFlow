@@ -31,7 +31,10 @@ router.post("/dev/sim-pr", async (req, res) => {
       });
     }
 
-    const project = await prisma.project.findUnique({ where: { id: projectId } });
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      include: { user: true }
+    });
     if (!project) {
       return res.status(404).json({ error: "project not found" });
     }
@@ -39,10 +42,17 @@ router.post("/dev/sim-pr", async (req, res) => {
     if (action === "close") {
       await handlePRClosed({ project, prNumber: parsedPrNumber });
     } else {
+      const simSource = action === "open"
+        ? "WEBHOOK_OPEN"
+        : action === "reopen"
+          ? "WEBHOOK_REOPEN"
+          : "WEBHOOK_SYNC";
       await handlePROpenOrSync({
         project,
         prNumber: parsedPrNumber,
-        ref: typeof ref === "string" && ref.trim() ? ref.trim() : undefined
+        ref: typeof ref === "string" && ref.trim() ? ref.trim() : undefined,
+        source: simSource,
+        asyncQueue: true
       });
     }
 

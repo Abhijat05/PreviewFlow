@@ -103,12 +103,21 @@ export async function handleGithubWebhook(req, res) {
         return res.status(200).send("hobby_sync_ignored");
       }
 
+      const actionToSource = {
+        opened: "WEBHOOK_OPEN",
+        synchronize: "WEBHOOK_SYNC",
+        reopened: "WEBHOOK_REOPEN"
+      };
+
       await openOrSyncHandler({
         project,
         prNumber,
         ref: headRef || headSha,
         commitSha: headSha,
-        user: project.user
+        user: project.user,
+        source: actionToSource[action] || "WEBHOOK_SYNC",
+        commitMessage: payload.pull_request?.title || null,
+        asyncQueue: true
       });
 
       if (deliveryId) {

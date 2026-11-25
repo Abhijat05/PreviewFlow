@@ -25,6 +25,7 @@ import previewMetricsRoutes from "./routes/previewMetrics.js";
 import devSim from "./routes/devSimulate.js"; // Development simulation routes
 import { startPeriodicDiskCleanup } from "./services/repoService.js";
 import { createWorkerLoop } from "./services/buildWorker.js";
+import { executeBuildJob } from "./services/buildOrchestrator.js";
 
 const app = express();
 const server = http.createServer(app);
@@ -149,8 +150,8 @@ if (!isTest) {
     buildWorkerInstance = createWorkerLoop({
       pollIntervalMs: Number(process.env.BUILD_POLL_INTERVAL_MS) || 2000,
       leaseDurationSeconds: Number(process.env.BUILD_LEASE_SECONDS) || 60,
-      executeJob: async (job) => {
-        console.log(`[Worker] Processing build ${job.id} for preview ${job.previewId} (commit: ${job.commitSha})`);
+      executeJob: async (job, context) => {
+        await executeBuildJob(job, context);
       }
     });
     buildWorkerInstance.start();
