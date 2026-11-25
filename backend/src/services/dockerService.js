@@ -49,10 +49,26 @@ export function getDockerExecutable() {
 }
 
 /**
- * Execute a command safely via spawn without shell expansion, streaming logs
+ * Creates a standardized AbortError instance for cooperative build cancellation.
  */
-export function runCommand(executable, args = [], onData) {
+function createAbortError(message = "Docker operation aborted") {
+  const err = new Error(message);
+  err.name = "AbortError";
+  err.isAborted = true;
+  return err;
+}
+
+/**
+ * Execute a command safely via spawn without shell expansion, streaming logs.
+ * Supports cooperative termination via an optional AbortSignal.
+ */
+export function runCommand(executable, args = [], onData, options = {}) {
   const resolvedBin = executable === "docker" ? getDockerExecutable() : executable;
+  const { abortSignal } = options || {};
+
+  if (abortSignal?.aborted) {
+    return Promise.reject(createAbortError(`Command '${executable}' aborted before start`));
+  }
 
   return new Promise((resolve, reject) => {
     const child = spawn(resolvedBin, args, {
@@ -61,10 +77,57 @@ export function runCommand(executable, args = [], onData) {
       env: process.env
     });
 
+    let settled = false;
+    let aborted = false;
+    let killTimer = null;
+
+    const cleanup = () => {
+      if (abortSignal) {
+        abortSignal.removeEventListener("abort", onAbort);
+      }
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+    };
+
+    const onAbort = () => {
+      if (settled) return;
+      aborted = true;
+      onData?.(`\n[Build Aborted] Stopping '${executable}' process...\n`);
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // ignore if already exited
+      }
+      killTimer = setTimeout(() => {
+        try {
+          if (!child.killed) {
+            child.kill("SIGKILL");
+          }
+        } catch {
+          // ignore
+        }
+      }, 2000);
+      if (killTimer.unref) killTimer.unref();
+    };
+
+    if (abortSignal) {
+      abortSignal.addEventListener("abort", onAbort, { once: true });
+    }
+
     child.stdout?.on("data", (d) => onData?.(d.toString()));
     child.stderr?.on("data", (d) => onData?.(d.toString()));
 
     child.on("close", (code) => {
+      cleanup();
+      if (settled) return;
+      settled = true;
+
+      if (aborted || abortSignal?.aborted) {
+        return reject(createAbortError(`Command '${executable}' aborted`));
+      }
+
       if (code === 0) {
         resolve();
       } else {
@@ -75,6 +138,13 @@ export function runCommand(executable, args = [], onData) {
     });
 
     child.on("error", (err) => {
+      cleanup();
+      if (settled) return;
+      settled = true;
+
+      if (aborted || abortSignal?.aborted) {
+        return reject(createAbortError(`Command '${executable}' aborted`));
+      }
       onData?.(`\n[Process Error] Failed to execute '${executable}': ${err.message}\n`);
       reject(err);
     });
@@ -281,8 +351,23 @@ export function removeContainerIfExists(containerName) {
  *   - previewId: Prisma preview.id
  *   - repoPath: local path to cloned repo
  *   - prNumber: PR number
+ *   - buildNumber: optional explicit build number (provided by buildOrchestrator)
+ *   - abortSignal: optional AbortSignal for cooperative cancellation
+ *   - managedByOrchestrator: when true, returns metadata without mutating Preview directly
  */
-export async function buildPreview({ project, previewId, repoPath, prNumber }) {
+export async function buildPreview({
+  project,
+  previewId,
+  repoPath,
+  prNumber,
+  buildNumber,
+  abortSignal,
+  managedByOrchestrator = false
+}) {
+  if (abortSignal?.aborted) {
+    throw createAbortError("Build aborted before Docker execution");
+  }
+
   let logs = "";
   const push = (chunk) => {
     logs += chunk;
@@ -293,21 +378,23 @@ export async function buildPreview({ project, previewId, repoPath, prNumber }) {
     }
   };
 
-  // MARK BUILD START
+  // MARK BUILD START (for direct/legacy non-orchestrated calls)
   const buildStartedAt = new Date();
-  await prisma.preview.update({
-    where: { id: previewId },
-    data: {
-      status: "building",
-      buildStartedAt
-    }
-  });
+  if (!managedByOrchestrator) {
+    await prisma.preview.update({
+      where: { id: previewId },
+      data: {
+        status: "building",
+        buildStartedAt
+      }
+    });
+  }
 
   // Load preview to get current buildNumber and port (if any)
   const preview = await prisma.preview.findUnique({ where: { id: previewId } });
   if (!preview) throw new Error("Preview row not found: " + previewId);
 
-  const nextBuildNumber = preview.buildNumber || 1;
+  const nextBuildNumber = buildNumber || preview.buildNumber || 1;
 
   // generate deterministic container name
   const containerName = generateContainerName(project, prNumber, nextBuildNumber);
@@ -317,6 +404,8 @@ export async function buildPreview({ project, previewId, repoPath, prNumber }) {
 
   // Assign or revalidate port
   let assignedPort = preview.port;
+  let newlyAllocatedPort = null;
+  let containerStarted = false;
   const pool = getPortPoolForTier(project?.user?.tier);
   const minPort = pool?.min || 5000;
   const maxPort = pool?.max || 5999;
@@ -324,21 +413,9 @@ export async function buildPreview({ project, previewId, repoPath, prNumber }) {
   try {
     if (!assignedPort) {
       const freePort = await findAvailablePort(minPort, maxPort);
+      newlyAllocatedPort = freePort;
 
-      try {
-        await prisma.preview.update({
-          where: { id: previewId },
-          data: { port: freePort }
-        });
-      } finally {
-        releasePortInMemory(freePort);
-      }
-
-      assignedPort = freePort;
-    } else {
-      const free = await isPortFree(assignedPort);
-      if (!free) {
-        const freePort = await findAvailablePort(minPort, maxPort);
+      if (!managedByOrchestrator) {
         try {
           await prisma.preview.update({
             where: { id: previewId },
@@ -346,24 +423,47 @@ export async function buildPreview({ project, previewId, repoPath, prNumber }) {
           });
         } finally {
           releasePortInMemory(freePort);
+          newlyAllocatedPort = null;
+        }
+      }
+
+      assignedPort = freePort;
+    } else {
+      const free = await isPortFree(assignedPort);
+      if (!free) {
+        const freePort = await findAvailablePort(minPort, maxPort);
+        newlyAllocatedPort = freePort;
+
+        if (!managedByOrchestrator) {
+          try {
+            await prisma.preview.update({
+              where: { id: previewId },
+              data: { port: freePort }
+            });
+          } finally {
+            releasePortInMemory(freePort);
+            newlyAllocatedPort = null;
+          }
         }
         assignedPort = freePort;
       }
     }
 
-    await prisma.preview.update({
-      where: { id: previewId },
-      data: {
-        containerName,
-        buildNumber: { increment: 1 }
-      }
-    });
+    if (!managedByOrchestrator) {
+      await prisma.preview.update({
+        where: { id: previewId },
+        data: {
+          containerName,
+          buildNumber: { increment: 1 }
+        }
+      });
+    }
 
     // Build image name sanitized
     const safeOwner = String(project.repoOwner || "").replace(/[^a-zA-Z0-9_.-]/g, "-");
     const safeRepo = String(project.repoName || "").replace(/[^a-zA-Z0-9_.-]/g, "-");
     const safePr = String(prNumber).replace(/[^0-9]/g, "");
-    const imageName = `${safeOwner}-${safeRepo}-pr-${safePr}`.toLowerCase();
+    const imageName = `${safeOwner}-${safeRepo}-pr-${safePr}:b${nextBuildNumber}`.toLowerCase();
 
     // Detect project framework & configuration dynamically
     const projectConfig = resolveProjectConfig(repoPath);
@@ -375,7 +475,11 @@ export async function buildPreview({ project, previewId, repoPath, prNumber }) {
     // Secure build execution via spawn
     const buildArgs = ["build", "-t", imageName, "-f", dockerfile, repoPath];
     push(`\n> docker ${buildArgs.join(" ")}\n`);
-    await runCommand("docker", buildArgs, push);
+    await runCommand("docker", buildArgs, push, { abortSignal });
+
+    if (abortSignal?.aborted) {
+      throw createAbortError("Build aborted after image build");
+    }
 
     // Secure run execution with resource limits & safe port binding to localhost
     const runArgs = [
@@ -395,43 +499,70 @@ export async function buildPreview({ project, previewId, repoPath, prNumber }) {
       imageName
     ];
     push(`\n> docker ${runArgs.join(" ")}\n`);
-    await runCommand("docker", runArgs, push);
+    await runCommand("docker", runArgs, push, { abortSignal });
+    containerStarted = true;
 
-    // Build completed
     const url = `http://localhost:${assignedPort}`;
     const buildCompletedAt = new Date();
 
-    await prisma.preview.update({
-      where: { id: previewId },
-      data: {
-        status: "live",
-        url,
-        buildLogs: logs,
-        buildCompletedAt
-      }
-    });
+    if (!managedByOrchestrator) {
+      await prisma.preview.update({
+        where: { id: previewId },
+        data: {
+          status: "live",
+          url,
+          buildLogs: logs,
+          buildCompletedAt
+        }
+      });
+
+      try {
+        getIO().to(previewId).emit("log-finish", { url });
+      } catch (e) { /* ignore */ }
+
+      return url;
+    }
 
     try {
       getIO().to(previewId).emit("log-finish", { url });
     } catch (e) { /* ignore */ }
 
-    return url;
+    return {
+      url,
+      containerName,
+      port: assignedPort,
+      imageName,
+      logs
+    };
   } catch (err) {
-    try {
-      await prisma.preview.update({
-        where: { id: previewId },
-        data: {
-          status: "error",
-          buildLogs: logs + "\n\nERROR:\n" + (err?.message || String(err)),
-          buildCompletedAt: new Date(),
-          port: null
-        }
-      });
-    } catch (e) {
-      console.error("Failed to mark preview error & free port:", e?.message || e);
+    if (containerStarted) {
+      await removeContainer(containerName).catch(() => {});
+    }
+    if (newlyAllocatedPort) {
+      releasePortInMemory(newlyAllocatedPort);
     }
 
-    try { getIO().to(previewId).emit("log-error", { message: err.message }); } catch (e) { /* ignore */ }
+    if (err && typeof err === "object") {
+      err.buildLogs = logs + "\n\nERROR:\n" + (err?.message || String(err));
+    }
+
+    if (!managedByOrchestrator) {
+      try {
+        await prisma.preview.update({
+          where: { id: previewId },
+          data: {
+            status: "error",
+            buildLogs: logs + "\n\nERROR:\n" + (err?.message || String(err)),
+            buildCompletedAt: new Date(),
+            port: null
+          }
+        });
+      } catch (e) {
+        console.error("Failed to mark preview error & free port:", e?.message || e);
+      }
+
+      try { getIO().to(previewId).emit("log-error", { message: err.message }); } catch (e) { /* ignore */ }
+    }
 
     throw err;
   }

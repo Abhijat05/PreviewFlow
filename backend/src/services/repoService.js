@@ -35,12 +35,34 @@ export function sanitizeGitError(err) {
 
 /**
  * Clones a repository and checks out the specific PR or branch ref.
- * Supports private repositories via accessToken.
+ * Supports private repositories via accessToken and cooperative AbortSignal.
  */
-export async function cloneRepo({ repoOwner, repoName, ref, commitSha, prNumber, accessToken, cloneUrlOverride }) {
+export async function cloneRepo({
+  repoOwner,
+  repoName,
+  ref,
+  commitSha,
+  prNumber,
+  accessToken,
+  cloneUrlOverride,
+  abortSignal
+}) {
   if (!repoOwner || !repoName || typeof repoOwner !== "string" || typeof repoName !== "string" || !repoOwner.trim() || !repoName.trim()) {
     throw new Error("Invalid repository coordinates: repoOwner and repoName are required.");
   }
+
+  if (abortSignal?.aborted) {
+    const err = new Error("Clone aborted before starting");
+    err.name = "AbortError";
+    err.isAborted = true;
+    throw err;
+  }
+
+  const hasPinnedSha =
+    typeof commitSha === "string" &&
+    commitSha.trim() !== "" &&
+    commitSha !== "pr-head" &&
+    commitSha !== "HEAD";
 
   const cleanOwner = repoOwner.trim();
   const cleanRepo = repoName.trim();
@@ -53,19 +75,26 @@ export async function cloneRepo({ repoOwner, repoName, ref, commitSha, prNumber,
     // Clone repository (depth 50 to allow PR branch fetch)
     await git.clone(cloneUrl, tempDir, ["--depth", "50"]);
 
+    if (abortSignal?.aborted) {
+      const err = new Error("Clone aborted after git clone");
+      err.name = "AbortError";
+      err.isAborted = true;
+      throw err;
+    }
+
     // If prNumber is provided, fetch pull request head directly (works for forks & cross-repo PRs)
     if (prNumber) {
       try {
         await git.cwd(tempDir).fetch("origin", `pull/${prNumber}/head:pr-${prNumber}`);
-        if (commitSha) {
-          await git.cwd(tempDir).checkout(commitSha);
+        if (hasPinnedSha) {
+          await git.cwd(tempDir).checkout(commitSha.trim());
         } else {
           await git.cwd(tempDir).checkout(`pr-${prNumber}`);
         }
       } catch (prErr) {
         // Fallback to checking out commitSha or branch ref if PR ref fetch failed
-        if (commitSha) {
-          await git.cwd(tempDir).checkout(commitSha);
+        if (hasPinnedSha) {
+          await git.cwd(tempDir).checkout(commitSha.trim());
         } else if (ref) {
           await git.cwd(tempDir).checkout(ref);
         } else {
@@ -81,10 +110,17 @@ export async function cloneRepo({ repoOwner, repoName, ref, commitSha, prNumber,
           }
         }
       }
-    } else if (commitSha) {
-      await git.cwd(tempDir).checkout(commitSha);
+    } else if (hasPinnedSha) {
+      await git.cwd(tempDir).checkout(commitSha.trim());
     } else if (ref) {
       await git.cwd(tempDir).checkout(ref);
+    }
+
+    if (abortSignal?.aborted) {
+      const err = new Error("Clone aborted after checkout");
+      err.name = "AbortError";
+      err.isAborted = true;
+      throw err;
     }
 
     // Security: Reset origin remote URL to remove token from local .git/config on disk
@@ -99,10 +135,14 @@ export async function cloneRepo({ repoOwner, repoName, ref, commitSha, prNumber,
 
     return tempDir;
   } catch (err) {
-    // Cleanup temp directory immediately if clone fails
+    // Cleanup temp directory immediately if clone fails or is aborted
     try {
       fs.rmSync(tempDir, { recursive: true, force: true });
     } catch {}
+
+    if (err?.isAborted || err?.name === "AbortError") {
+      throw err;
+    }
 
     throw sanitizeGitError(err);
   }
