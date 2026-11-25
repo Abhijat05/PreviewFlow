@@ -679,20 +679,21 @@ function sleepWithAbort(ms, abortSignal) {
       return reject(createAbortError("Health check aborted"));
     }
 
-    const timer = setTimeout(() => {
-      if (abortSignal) abortSignal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    if (timer.unref) timer.unref();
+    let timer = null;
 
     const onAbort = () => {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       reject(createAbortError("Health check aborted"));
     };
 
     if (abortSignal) {
       abortSignal.addEventListener("abort", onAbort, { once: true });
     }
+
+    timer = setTimeout(() => {
+      if (abortSignal) abortSignal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
   });
 }
 
