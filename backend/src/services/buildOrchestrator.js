@@ -4,6 +4,7 @@ import { prisma as defaultPrisma } from "../db.js";
 import { getIO } from "../socket.js";
 import { cloneRepo } from "./repoService.js";
 import { buildPreview, removeContainer, removeImage, releasePortInMemory } from "./dockerService.js";
+import { releasePort, releasePreviewPorts } from "./portService.js";
 import { enqueueBuild, TERMINAL_BUILD_STATUSES } from "./buildQueueService.js";
 
 /**
@@ -309,6 +310,7 @@ export async function executeBuildJob(
     builder = buildPreview,
     containerRemover = removeContainer,
     imageRemover = removeImage,
+    portReleaser = releasePort,
     client = defaultPrisma
   } = {}
 ) {
@@ -321,6 +323,7 @@ export async function executeBuildJob(
   let builtContainerName = null;
   let builtImageName = null;
   let allocatedPort = null;
+  let previousPort = null;
   let committedSwitch = false;
   let previewContext = null;
 
@@ -337,6 +340,7 @@ export async function executeBuildJob(
 
     const project = previewContext.project;
     const previousContainerName = previewContext.containerName || null;
+    previousPort = previewContext.port || null;
     const previousActiveBuild = previewContext.activeBuildId
       ? await client.build.findUnique({ where: { id: previewContext.activeBuildId } }).catch(() => null)
       : null;
@@ -438,11 +442,14 @@ export async function executeBuildJob(
       releasePortInMemory(allocatedPort);
     }
 
-    // Decommission old container & superseded image if a new container/image replaced them
+    // Decommission old container & superseded image/port if replaced
     if (previousContainerName && builtContainerName && previousContainerName !== builtContainerName) {
       await containerRemover(previousContainerName).catch((err) => {
         console.warn(`Failed to remove superseded container ${previousContainerName}:`, err?.message || err);
       });
+    }
+    if (previousPort && allocatedPort && previousPort !== allocatedPort) {
+      await portReleaser({ port: previousPort, previewId: previewContext.id, client }).catch(() => {});
     }
     if (previousImageTag && builtImageName && previousImageTag !== builtImageName) {
       await imageRemover(previousImageTag).catch(() => {});
@@ -477,6 +484,9 @@ export async function executeBuildJob(
     }
     if (allocatedPort && !committedSwitch) {
       releasePortInMemory(allocatedPort);
+      if (allocatedPort !== previousPort) {
+        await portReleaser({ port: allocatedPort, previewId: previewContext?.id, buildId: job.id, client }).catch(() => {});
+      }
     }
 
     const isAborted = err?.isAborted || err?.name === "AbortError" || controller.signal.aborted;
@@ -719,6 +729,7 @@ export async function closeOrDeletePreview({
   reason = "Preview deleted",
   containerRemover = removeContainer,
   imageRemover = removeImage,
+  previewPortsReleaser = releasePreviewPorts,
   userId = null,
   client = defaultPrisma
 }) {
@@ -783,6 +794,9 @@ export async function closeOrDeletePreview({
   for (const imageTag of imagesToRemove) {
     await imageRemover(imageTag).catch(() => {});
   }
+
+  // 4. Release all PortAllocation leases held by this preview
+  await previewPortsReleaser({ previewId: preview.id, client }).catch(() => {});
 
   // 3. Mark preview deleted in database
   const updated = await client.preview.update({

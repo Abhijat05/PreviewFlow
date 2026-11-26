@@ -5,6 +5,7 @@ import { prisma } from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { getTierLimits, compareTier, normalizeTier } from "../middleware/tierLimits.js";
 import { removeContainer } from "../services/dockerService.js";
+import { releasePreviewPorts } from "../services/portService.js";
 
 const router = express.Router();
 
@@ -194,7 +195,7 @@ export async function handleChangeTier(req, res) {
     }
 
     // Cleanup has been confirmed → perform deletions + tier update
-    // 1. Stop containers for previews that will be deleted (best-effort)
+    // 1. Stop containers & release ports for previews that will be deleted (best-effort)
     for (const pre of allPreviewsToDelete) {
       if (pre.containerName) {
         try {
@@ -206,6 +207,7 @@ export async function handleChangeTier(req, res) {
           );
         }
       }
+      await releasePreviewPorts({ previewId: pre.id }).catch(() => {});
     }
 
     // 2. Delete preview metrics first, then previews, then projects in transaction

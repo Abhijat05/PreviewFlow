@@ -27,6 +27,7 @@ import { startPeriodicDiskCleanup } from "./services/repoService.js";
 import { startPeriodicDockerCleanup } from "./services/dockerService.js";
 import { createWorkerLoop } from "./services/buildWorker.js";
 import { executeBuildJob } from "./services/buildOrchestrator.js";
+import { runStartupReconciliation } from "./services/reconciliationService.js";
 
 const app = express();
 const server = http.createServer(app);
@@ -156,8 +157,24 @@ if (!isTest) {
         await executeBuildJob(job, context);
       }
     });
-    buildWorkerInstance.start();
-    console.log(`[Worker] Build worker loop started (id: ${buildWorkerInstance.getWorkerId()})`);
+
+    runStartupReconciliation()
+      .then((recReport) => {
+        if (recReport?.unmigrated) {
+          console.warn("[Reconciler] PortAllocation/Build migrations pending; skipped DB reconciliation.");
+        } else if (!recReport?.skipped) {
+          console.log(
+            `[Reconciler] Startup complete: preserved=${recReport.preservedContainers}, pruned=${recReport.prunedContainers}, releasedPorts=${recReport.releasedPorts}, recoveredBuilds=${recReport.staleBuildsRecovered}`
+          );
+        }
+      })
+      .catch((err) => {
+        console.warn("[Reconciler] Startup reconciliation warning:", err?.message || err);
+      })
+      .finally(() => {
+        buildWorkerInstance.start();
+        console.log(`[Worker] Build worker loop started (id: ${buildWorkerInstance.getWorkerId()})`);
+      });
   }
 }
 

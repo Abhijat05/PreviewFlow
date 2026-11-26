@@ -2,12 +2,30 @@
 import fs from "fs";
 import path from "path";
 import { spawn, execFile, execFileSync } from "child_process";
-import net from "net";
 import { prisma } from "../db.js";
 import { getIO } from "../socket.js";
 import { resolveProjectConfig } from "./detectProjectType.js";
 import { getPortPoolForTier } from "../middleware/subscription.js";
 import { normalizeTier } from "../middleware/tierLimits.js";
+import {
+  isPortFree,
+  portReservedInDB,
+  reservePortInMemory,
+  releasePortInMemory,
+  getPendingAllocatedPorts,
+  findAvailablePort,
+  allocatePort,
+  releasePort
+} from "./portService.js";
+
+export {
+  isPortFree,
+  portReservedInDB,
+  reservePortInMemory,
+  releasePortInMemory,
+  getPendingAllocatedPorts,
+  findAvailablePort
+};
 
 export const DEFAULT_DOCKER_BUILD_TIMEOUT_MS = Number(process.env.DOCKER_BUILD_TIMEOUT_MS) || 600_000;
 export const DEFAULT_DOCKER_RUN_TIMEOUT_MS = Number(process.env.DOCKER_RUN_TIMEOUT_MS) || 30_000;
@@ -371,89 +389,8 @@ export function startPeriodicDockerCleanup({
 }
 
 /* ===========================
-   Port allocation utilities
+   Port utilities re-exported from portService.js
    =========================== */
-
-/**
- * Check if a TCP port is free on localhost.
- * Resolves true if free, false if bound.
- */
-export function isPortFree(port) {
-  return new Promise((resolve) => {
-    const tester = net
-      .createServer()
-      .once("error", () => {
-        resolve(false);
-      })
-      .once("listening", () => {
-        tester.close(() => resolve(true));
-      })
-      .listen(port, "127.0.0.1");
-  });
-}
-
-/**
- * Determine if a port is reserved in DB for a non-deleted preview.
- */
-export async function portReservedInDB(port) {
-  const existing = await prisma.preview.findFirst({
-    where: { port, status: { not: "deleted" } }
-  });
-  return !!existing;
-}
-
-const pendingAllocatedPorts = new Set();
-let allocationMutex = Promise.resolve();
-
-function acquirePortLock() {
-  let release;
-  const nextLock = new Promise((resolve) => {
-    release = resolve;
-  });
-  const currentLock = allocationMutex;
-  allocationMutex = currentLock.then(() => nextLock);
-  return currentLock.then(() => release);
-}
-
-export function reservePortInMemory(port) {
-  pendingAllocatedPorts.add(port);
-}
-
-export function releasePortInMemory(port) {
-  pendingAllocatedPorts.delete(port);
-}
-
-export function getPendingAllocatedPorts() {
-  return Array.from(pendingAllocatedPorts);
-}
-
-/**
- * Find first available port in range [minPort, maxPort].
- */
-export async function findAvailablePort(minPort = 5000, maxPort = 5999) {
-  const unlock = await acquirePortLock();
-  try {
-    for (let port = minPort; port <= maxPort; port++) {
-      if (pendingAllocatedPorts.has(port)) continue;
-
-      const reserved = await portReservedInDB(port);
-      if (reserved) continue;
-
-      /* eslint-disable no-await-in-loop */
-      const free = await isPortFree(port);
-      if (!free) continue;
-
-      const reserved2 = await portReservedInDB(port);
-      if (reserved2) continue;
-
-      pendingAllocatedPorts.add(port);
-      return port;
-    }
-    throw new Error(`No free ports available in configured range (${minPort}-${maxPort})`);
-  } finally {
-    unlock();
-  }
-}
 
 /* ===========================
    Naming, labels & resource limits
@@ -851,7 +788,7 @@ export async function buildPreview({
   // Remove any existing container with same name (stale)
   removeContainerIfExists(containerName);
 
-  // Assign or revalidate port
+  // Assign or revalidate port via cross-process PostgreSQL port leasing
   let assignedPort = preview.port;
   let newlyAllocatedPort = null;
   let containerStarted = false;
@@ -861,52 +798,32 @@ export async function buildPreview({
   const maxPort = pool?.max || 5999;
 
   try {
-    if (!assignedPort) {
-      const freePort = await findAvailablePort(minPort, maxPort);
-      newlyAllocatedPort = freePort;
+    const portResult = await allocatePort({
+      previewId,
+      buildId,
+      tier: userTier,
+      minPort,
+      maxPort,
+      preferredPort: assignedPort
+    });
 
-      if (!managedByOrchestrator) {
-        try {
-          await prisma.preview.update({
-            where: { id: previewId },
-            data: { port: freePort }
-          });
-        } finally {
-          releasePortInMemory(freePort);
-          newlyAllocatedPort = null;
-        }
-      }
-
-      assignedPort = freePort;
-    } else {
-      const free = await isPortFree(assignedPort);
-      if (!free) {
-        const freePort = await findAvailablePort(minPort, maxPort);
-        newlyAllocatedPort = freePort;
-
-        if (!managedByOrchestrator) {
-          try {
-            await prisma.preview.update({
-              where: { id: previewId },
-              data: { port: freePort }
-            });
-          } finally {
-            releasePortInMemory(freePort);
-            newlyAllocatedPort = null;
-          }
-        }
-        assignedPort = freePort;
-      }
-    }
+    assignedPort = portResult.port;
+    newlyAllocatedPort = assignedPort;
 
     if (!managedByOrchestrator) {
-      await prisma.preview.update({
-        where: { id: previewId },
-        data: {
-          containerName,
-          buildNumber: { increment: 1 }
-        }
-      });
+      try {
+        await prisma.preview.update({
+          where: { id: previewId },
+          data: {
+            port: assignedPort,
+            containerName,
+            buildNumber: { increment: 1 }
+          }
+        });
+      } finally {
+        releasePortInMemory(assignedPort);
+        newlyAllocatedPort = null;
+      }
     }
 
     const imageName = generateImageTag(project, prNumber, nextBuildNumber, commitSha);
@@ -1017,7 +934,11 @@ export async function buildPreview({
       await removeContainer(containerName).catch(() => {});
     }
     if (newlyAllocatedPort) {
-      releasePortInMemory(newlyAllocatedPort);
+      if (!managedByOrchestrator) {
+        await releasePort({ port: newlyAllocatedPort, previewId, buildId }).catch(() => {});
+      } else {
+        releasePortInMemory(newlyAllocatedPort);
+      }
     }
 
     if (err && typeof err === "object") {
