@@ -219,6 +219,7 @@ describe("buildOrchestrator Unit & Lifecycle Tests", () => {
     tempDirsToClean.push(tempRepoDir);
 
     const removedContainers = [];
+    const releasedPorts = [];
     let clonedSha = null;
 
     const result = await executeBuildJob(job, {
@@ -236,6 +237,10 @@ describe("buildOrchestrator Unit & Lifecycle Tests", () => {
       containerRemover: async (name) => {
         removedContainers.push(name);
         return true;
+      },
+      portReleaser: async ({ port }) => {
+        releasedPorts.push(port);
+        return { released: true };
       }
     });
 
@@ -244,6 +249,7 @@ describe("buildOrchestrator Unit & Lifecycle Tests", () => {
     assert.equal(clonedSha, "sha_release_777");
     assert.equal(fs.existsSync(tempRepoDir), false, "Cloned temp directory must be removed");
     assert.deepEqual(removedContainers, ["preview-old-b1"]);
+    assert.deepEqual(releasedPorts, [5050]);
 
     const updatedPreview = previews.get(prev.id);
     assert.equal(updatedPreview.status, "live");

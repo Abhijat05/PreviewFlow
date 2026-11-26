@@ -28,17 +28,21 @@ describe("4.2 Docker Service Unit Tests", () => {
   let originalPreviewFindFirst;
   let originalPreviewFindUnique;
   let originalPreviewUpdate;
+  let originalPortAllocFindUnique;
 
   beforeEach(() => {
     originalPreviewFindFirst = prisma.preview.findFirst;
     originalPreviewFindUnique = prisma.preview.findUnique;
     originalPreviewUpdate = prisma.preview.update;
+    originalPortAllocFindUnique = prisma.portAllocation.findUnique;
+    prisma.portAllocation.findUnique = async () => null;
   });
 
   afterEach(() => {
     prisma.preview.findFirst = originalPreviewFindFirst;
     prisma.preview.findUnique = originalPreviewFindUnique;
     prisma.preview.update = originalPreviewUpdate;
+    prisma.portAllocation.findUnique = originalPortAllocFindUnique;
   });
 
   test("generateContainerName sanitizes project id, pr number, and build number", () => {

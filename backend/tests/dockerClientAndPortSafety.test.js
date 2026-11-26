@@ -69,9 +69,11 @@ describe("Docker Client Configuration & Port TOCTOU Safety", () => {
 
   test("findAvailablePort skips ports currently in pendingAllocatedPorts", async () => {
     const originalFindFirst = prisma.preview.findFirst;
+    const originalPortAllocFindUnique = prisma.portAllocation.findUnique;
     try {
       // Mock DB: no ports reserved in DB
       prisma.preview.findFirst = async () => null;
+      prisma.portAllocation.findUnique = async () => null;
 
       // Reserve port 5100 in memory
       reservePortInMemory(5100);
@@ -88,13 +90,16 @@ describe("Docker Client Configuration & Port TOCTOU Safety", () => {
       releasePortInMemory(allocated);
     } finally {
       prisma.preview.findFirst = originalFindFirst;
+      prisma.portAllocation.findUnique = originalPortAllocFindUnique;
     }
   });
 
   test("concurrent calls to findAvailablePort allocate distinct ports without collision", async () => {
     const originalFindFirst = prisma.preview.findFirst;
+    const originalPortAllocFindUnique = prisma.portAllocation.findUnique;
     try {
       prisma.preview.findFirst = async () => null;
+      prisma.portAllocation.findUnique = async () => null;
 
       // Execute 3 concurrent calls
       const [portA, portB, portC] = await Promise.all([
@@ -112,6 +117,7 @@ describe("Docker Client Configuration & Port TOCTOU Safety", () => {
       releasePortInMemory(portC);
     } finally {
       prisma.preview.findFirst = originalFindFirst;
+      prisma.portAllocation.findUnique = originalPortAllocFindUnique;
     }
   });
 });

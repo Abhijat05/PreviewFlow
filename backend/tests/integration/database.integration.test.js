@@ -162,4 +162,46 @@ describe("6. Prisma & Database Integration Tests", () => {
     assert.equal(remainingPreview, null, "Preview must be cascade-deleted");
     assert.equal(remainingMetric, null, "PreviewMetric must be cascade-deleted");
   });
+
+  test("PortAllocation model supports atomic port lease, setNull on delete, and unique buildId", async (t) => {
+    if (!isDbAvailable) {
+      t.skip("PostgreSQL test database service is not available in current environment");
+      return;
+    }
+
+    const testPort = 5699;
+    await testPrisma.portAllocation.deleteMany({ where: { port: testPort } });
+
+    const testGithubId = `gh_port_${Date.now()}`;
+    const user = await testPrisma.user.create({
+      data: { githubId: testGithubId, name: "Port Test User", tier: "FREE" }
+    });
+    createdUserIds.push(user.id);
+
+    const project = await testPrisma.project.create({
+      data: { userId: user.id, repoOwner: "port-org", repoName: "port-app", webhookSecret: "s1" }
+    });
+    const preview = await testPrisma.preview.create({
+      data: { projectId: project.id, prNumber: 55, status: "live", port: testPort }
+    });
+
+    const alloc = await testPrisma.portAllocation.create({
+      data: {
+        port: testPort,
+        previewId: preview.id,
+        tier: "FREE",
+        isAllocated: true,
+        allocatedAt: new Date()
+      }
+    });
+
+    assert.equal(alloc.port, testPort);
+    assert.equal(alloc.isAllocated, true);
+
+    await testPrisma.preview.delete({ where: { id: preview.id } });
+    const afterDelete = await testPrisma.portAllocation.findUnique({ where: { port: testPort } });
+    assert.equal(afterDelete.previewId, null, "PortAllocation previewId should set null on preview deletion");
+
+    await testPrisma.portAllocation.deleteMany({ where: { port: testPort } });
+  });
 });

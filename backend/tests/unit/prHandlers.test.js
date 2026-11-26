@@ -13,6 +13,8 @@ describe("4.3 Pull Request Handlers Unit Tests", () => {
   let originalUpdate;
   let originalBuildFindMany;
   let originalBuildUpdate;
+  let originalPortFindMany;
+  let originalPortUpdateMany;
   let mockTempDir;
 
   beforeEach(() => {
@@ -21,9 +23,13 @@ describe("4.3 Pull Request Handlers Unit Tests", () => {
     originalUpdate = prisma.preview.update;
     originalBuildFindMany = prisma.build.findMany;
     originalBuildUpdate = prisma.build.update;
+    originalPortFindMany = prisma.portAllocation.findMany;
+    originalPortUpdateMany = prisma.portAllocation.updateMany;
 
     prisma.build.findMany = async () => [];
     prisma.build.update = async ({ where, data }) => ({ id: where.id, ...data });
+    prisma.portAllocation.findMany = async () => [];
+    prisma.portAllocation.updateMany = async () => ({ count: 0 });
 
     mockTempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pr-handler-test-"));
   });
@@ -34,6 +40,8 @@ describe("4.3 Pull Request Handlers Unit Tests", () => {
     prisma.preview.update = originalUpdate;
     prisma.build.findMany = originalBuildFindMany;
     prisma.build.update = originalBuildUpdate;
+    prisma.portAllocation.findMany = originalPortFindMany;
+    prisma.portAllocation.updateMany = originalPortUpdateMany;
 
     try {
       if (fs.existsSync(mockTempDir)) {

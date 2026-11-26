@@ -2,12 +2,22 @@
 import { prisma } from "../../src/db.js";
 
 const originalMethods = new Map();
+let originalQueryRaw;
+let originalExecuteRaw;
 
 /**
  * Creates mock implementations for Prisma models.
  */
 export function mockPrisma(overrides = {}) {
-  const models = ["user", "project", "preview", "previewMetric", "build", "webhookDelivery"];
+  const models = [
+    "user",
+    "project",
+    "preview",
+    "previewMetric",
+    "build",
+    "webhookDelivery",
+    "portAllocation"
+  ];
   const defaultMethods = [
     "findUnique",
     "findFirst",
@@ -21,6 +31,16 @@ export function mockPrisma(overrides = {}) {
     "count"
   ];
 
+  if (originalQueryRaw === undefined) {
+    originalQueryRaw = prisma.$queryRaw;
+  }
+  if (originalExecuteRaw === undefined) {
+    originalExecuteRaw = prisma.$executeRaw;
+  }
+
+  prisma.$queryRaw = overrides.$queryRaw || (async () => null);
+  prisma.$executeRaw = overrides.$executeRaw || (async () => 0);
+
   for (const model of models) {
     if (!prisma[model]) {
       prisma[model] = {};
@@ -32,14 +52,12 @@ export function mockPrisma(overrides = {}) {
         originalMethods.set(key, prisma[model][method]);
       }
 
-      // Check if an override is provided for model.method
       if (overrides[model] && overrides[model][method]) {
         prisma[model][method] = overrides[model][method];
       } else if (!overrides[model] || overrides[model][method] === undefined) {
-        // Default safe stub that returns null/empty array/0 rather than querying DB
         prisma[model][method] = async () => {
           if (method === "findMany") return [];
-          if (method === "count") return 0;
+          if (method === "count" || method === "updateMany" || method === "deleteMany") return method === "count" ? 0 : { count: 0 };
           return null;
         };
       }
@@ -57,6 +75,13 @@ export function mockPrisma(overrides = {}) {
         }
       }
       originalMethods.clear();
+
+      if (originalQueryRaw !== undefined) {
+        prisma.$queryRaw = originalQueryRaw;
+      }
+      if (originalExecuteRaw !== undefined) {
+        prisma.$executeRaw = originalExecuteRaw;
+      }
     }
   };
 }
