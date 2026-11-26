@@ -82,11 +82,12 @@ model Preview {
   metrics          PreviewMetric[]
 
   activeBuildId     String?
-  activeBuild       Build?          @relation("ActivePreviewBuild", fields: [activeBuildId], references: [id], onDelete: SetNull)
+  activeBuild       Build?           @relation("ActivePreviewBuild", fields: [activeBuildId], references: [id], onDelete: SetNull)
   latestBuildId     String?
   desiredCommitSha  String?
   deployedCommitSha String?
-  builds            Build[]         @relation("PreviewBuildHistory")
+  builds            Build[]          @relation("PreviewBuildHistory")
+  portAllocations   PortAllocation[] @relation("PreviewPortAllocations")
 
   @@unique([projectId, prNumber])
   @@index([status])
@@ -119,7 +120,8 @@ model Build {
   errorMessage   String?
   exitCode       Int?
 
-  activeForPreviews Preview[] @relation("ActivePreviewBuild")
+  activeForPreviews Preview[]       @relation("ActivePreviewBuild")
+  portAllocation    PortAllocation?
 
   @@unique([previewId, buildNumber])
   @@index([previewId, status])
@@ -161,4 +163,19 @@ model WebhookDelivery {
   @@index([deliveryId])
   @@index([projectId, prNumber])
   @@index([receivedAt])
+}
+
+model PortAllocation {
+  port           Int       @id
+  previewId      String?
+  preview        Preview?  @relation("PreviewPortAllocations", fields: [previewId], references: [id], onDelete: SetNull)
+  buildId        String?   @unique
+  build          Build?    @relation(fields: [buildId], references: [id], onDelete: SetNull)
+  tier           UserTier  @default(FREE)
+  isAllocated    Boolean   @default(false)
+  allocatedAt    DateTime?
+  lastVerifiedAt DateTime  @default(now())
+
+  @@index([tier, isAllocated])
+  @@index([previewId])
 }
