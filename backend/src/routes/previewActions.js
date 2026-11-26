@@ -9,6 +9,7 @@ import {
   closeOrDeletePreview,
   emitPreviewStatus
 } from "../services/buildOrchestrator.js";
+import { getBuildHistory } from "../services/buildQueueService.js";
 
 const router = express.Router();
 
@@ -220,6 +221,48 @@ export async function handleDeletePreview(req, res) {
   }
 }
 
+/* ----------------------------------------------------------
+   GET /api/preview/:id/builds
+   Retrieve ordered build history for an authorized preview
+----------------------------------------------------------- */
+export async function handleGetPreviewBuilds(req, res) {
+  try {
+    const previewId = req.params?.id;
+    const userId = req.user?.userId;
+    const limit = Math.min(Math.max(Number.parseInt(req.query?.limit, 10) || 20, 1), 100);
+    const offset = Math.max(Number.parseInt(req.query?.offset, 10) || 0, 0);
+
+    if (!previewId) {
+      return res.status(400).json({ error: "Missing preview id" });
+    }
+
+    const preview = await prisma.preview.findUnique({
+      where: { id: previewId },
+      include: { project: true }
+    });
+
+    if (!preview) return res.status(404).json({ error: "Preview not found" });
+    if (preview.project.userId !== userId) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
+    const builds = await getBuildHistory(previewId, { limit, offset });
+
+    return res.json({
+      previewId,
+      activeBuildId: preview.activeBuildId || null,
+      latestBuildId: preview.latestBuildId || null,
+      desiredCommitSha: preview.desiredCommitSha || null,
+      deployedCommitSha: preview.deployedCommitSha || null,
+      builds
+    });
+  } catch (err) {
+    console.error("get preview builds error:", err);
+    return res.status(500).json({ error: "Failed to load build history" });
+  }
+}
+
+router.get("/preview/:id/builds", requireAuth, handleGetPreviewBuilds);
 router.post("/preview/:id/rebuild", requireAuth, handleRebuildPreview);
 router.post("/preview/:id/cancel", requireAuth, handleCancelPreviewBuild);
 router.post("/preview/:id/delete", requireAuth, handleDeletePreview);

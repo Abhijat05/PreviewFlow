@@ -1,17 +1,48 @@
+// backend/src/services/statsWorker.js
 import docker from "./dockerClient.js";
 import { prisma } from "../db.js";
 import { getIO } from "../socket.js";
 
 const POLL_INTERVAL = 3000; // Balanced 3-second interval prevents Docker socket thrashing
 const STORE_INTERVAL = 30000; // Persist metric sample every 30 seconds
+const PRUNE_INTERVAL = 60 * 60 * 1000; // Prune expired metrics once per hour
+const DEFAULT_RETENTION_HOURS = Number(process.env.METRIC_RETENTION_HOURS) || 168; // 7 days
 
 const lastStoredAt = {};
+let lastPrunedAt = 0;
+
+export async function pruneExpiredPreviewMetrics({
+  retentionHours = DEFAULT_RETENTION_HOURS,
+  client = prisma
+} = {}) {
+  const cutoff = new Date(Date.now() - retentionHours * 60 * 60 * 1000);
+  try {
+    const res = await client.previewMetric.deleteMany({
+      where: { createdAt: { lt: cutoff } }
+    });
+    return res?.count || 0;
+  } catch {
+    return 0;
+  }
+}
 
 export function startStatsWorker() {
   console.log("------Stats worker started------");
+  let isTickRunning = false;
 
-  return setInterval(async () => {
+  const timer = setInterval(async () => {
+    if (isTickRunning) {
+      return; // Prevent overlapping poll cycles from thrashing Docker socket
+    }
+    isTickRunning = true;
+
     try {
+      const now = Date.now();
+      if (now - lastPrunedAt > PRUNE_INTERVAL) {
+        lastPrunedAt = now;
+        await pruneExpiredPreviewMetrics();
+      }
+
       let io;
       try {
         io = getIO();
@@ -36,11 +67,11 @@ export function startStatsWorker() {
         }
       });
 
-      for (const p of previews) {
+      for (const p of previews || []) {
         try {
-          const now = Date.now();
+          const sampleNow = Date.now();
           const last = lastStoredAt[p.id] || 0;
-          const needsStore = now - last > STORE_INTERVAL;
+          const needsStore = sampleNow - last > STORE_INTERVAL;
 
           // Check if any client is actively subscribed to this preview or user channel
           const hasListeners =
@@ -48,7 +79,7 @@ export function startStatsWorker() {
             Boolean(io.sockets.adapter.rooms.get(p.id)?.size) ||
             Boolean(p.project?.userId && io.sockets.adapter.rooms.get(`user:${p.project.userId}`)?.size);
 
-          // Optimization: Skip querying Docker if no active socket client is watching AND periodic store not due
+          // Skip querying Docker if no client is watching AND periodic store not due
           if (!hasListeners && !needsStore) {
             continue;
           }
@@ -134,19 +165,25 @@ export function startStatsWorker() {
                 }
               });
 
-              lastStoredAt[p.id] = now;
+              lastStoredAt[p.id] = sampleNow;
             } catch (e) {
               console.error("metric store failed", e.message);
             }
           }
-
-        } catch (err) {
+        } catch {
           // container not ready or stopped
         }
       }
-
     } catch (err) {
       console.error("stats worker error", err);
+    } finally {
+      isTickRunning = false;
     }
   }, POLL_INTERVAL);
+
+  if (timer.unref) {
+    timer.unref();
+  }
+
+  return timer;
 }

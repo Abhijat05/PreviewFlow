@@ -63,7 +63,31 @@ app.use(passport.initialize());
 
 // Health check endpoint for uptime monitoring & container orchestrators
 app.get("/health", (req, res) => {
-  res.json({ status: "healthy", timestamp: new Date().toISOString() });
+  res.json({
+    status: "healthy",
+    mode: PREVIEWFLOW_MODE,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Readiness check verifying PostgreSQL connectivity and worker state
+app.get("/health/ready", async (req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    return res.json({
+      status: "ready",
+      db: "connected",
+      mode: PREVIEWFLOW_MODE,
+      workerRunning: Boolean(buildWorkerInstance?.isRunning?.()),
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    return res.status(503).json({
+      status: "not_ready",
+      db: "disconnected",
+      error: process.env.NODE_ENV === "production" ? "database_unavailable" : err.message
+    });
+  }
 });
 
 app.get("/auth/github", passport.authenticate("github"));
@@ -120,10 +144,23 @@ if (process.env.NODE_ENV !== "production") {
   app.use("/", devSim);
 }
 
+// Global JSON error handler preventing stack trace leakage
+app.use((err, req, res, _next) => {
+  if (err?.type === "entity.parse.failed" || err instanceof SyntaxError) {
+    return res.status(400).json({ error: "invalid_json" });
+  }
+  console.error("Unhandled Express error:", err?.message || err);
+  return res.status(err?.status || 500).json({ error: "internal_error" });
+});
+
 const isTest = process.env.NODE_ENV === "test" || Boolean(process.env.NODE_TEST_CONTEXT);
 const PREVIEWFLOW_MODE = (process.env.PREVIEWFLOW_MODE || "all").toLowerCase();
 
 let buildWorkerInstance = null;
+let statsWorkerTimer = null;
+let diskCleanupTimer = null;
+let dockerCleanupTimer = null;
+let isShuttingDown = false;
 
 export function getBuildWorkerInstance() {
   return buildWorkerInstance;
@@ -133,14 +170,48 @@ export function setBuildWorkerInstance(instance) {
   buildWorkerInstance = instance;
 }
 
+/**
+ * Gracefully stops worker loops, background timers, HTTP server, and database connections.
+ */
+export async function shutdownServer({ disconnectDb = true, force = false } = {}) {
+  if (isShuttingDown && !force) return;
+  isShuttingDown = true;
+
+  if (buildWorkerInstance?.stop) {
+    buildWorkerInstance.stop();
+  }
+  if (statsWorkerTimer) {
+    clearInterval(statsWorkerTimer);
+    statsWorkerTimer = null;
+  }
+  if (diskCleanupTimer) {
+    clearInterval(diskCleanupTimer);
+    diskCleanupTimer = null;
+  }
+  if (dockerCleanupTimer) {
+    clearInterval(dockerCleanupTimer);
+    dockerCleanupTimer = null;
+  }
+
+  if (server.listening) {
+    await new Promise((resolve) => {
+      server.close(() => resolve());
+    });
+  }
+
+  if (disconnectDb && typeof prisma?.$disconnect === "function") {
+    await prisma.$disconnect().catch(() => {});
+  }
+}
+
 if (!isTest) {
   const shouldRunApi = PREVIEWFLOW_MODE === "all" || PREVIEWFLOW_MODE === "api";
   const shouldRunWorker = PREVIEWFLOW_MODE === "all" || PREVIEWFLOW_MODE === "worker";
 
   if (shouldRunApi) {
     initSocket(server);
-    startStatsWorker();
-    startPeriodicDiskCleanup();
+    statsWorkerTimer = startStatsWorker();
+    diskCleanupTimer = startPeriodicDiskCleanup();
 
     const PORT = process.env.PORT || 4000;
     server.listen(PORT, () => {
@@ -149,7 +220,7 @@ if (!isTest) {
   }
 
   if (shouldRunWorker) {
-    startPeriodicDockerCleanup();
+    dockerCleanupTimer = startPeriodicDockerCleanup();
     buildWorkerInstance = createWorkerLoop({
       pollIntervalMs: Number(process.env.BUILD_POLL_INTERVAL_MS) || 2000,
       leaseDurationSeconds: Number(process.env.BUILD_LEASE_SECONDS) || 60,
@@ -175,6 +246,15 @@ if (!isTest) {
         buildWorkerInstance.start();
         console.log(`[Worker] Build worker loop started (id: ${buildWorkerInstance.getWorkerId()})`);
       });
+  }
+
+  for (const sig of ["SIGTERM", "SIGINT"]) {
+    process.on(sig, () => {
+      console.log(`[Server] Received ${sig}, shutting down gracefully...`);
+      shutdownServer()
+        .then(() => process.exit(0))
+        .catch(() => process.exit(1));
+    });
   }
 }
 
