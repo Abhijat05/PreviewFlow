@@ -5,6 +5,7 @@ import { logger } from "./utils/logger.js";
 import { recordAuditEvent } from "./services/auditService.js";
 import { incActiveSockets, decActiveSockets } from "./services/metricsService.js";
 import { verifyAuthToken } from "./utils/jwtHelper.js";
+import { resolveAllowedOrigins, createCorsOriginCallback } from "./utils/networkConfig.js";
 
 let io;
 const AUTH_TIMEOUT_MS = Number(process.env.SOCKET_AUTH_TIMEOUT_MS) || 5000;
@@ -12,10 +13,11 @@ const MAX_SOCKETS_PER_USER = Number(process.env.MAX_SOCKETS_PER_USER) || 20;
 
 export function initSocket(server) {
   const userSocketIds = new Map();
+  const allowedOrigins = resolveAllowedOrigins();
 
   io = new Server(server, {
     cors: {
-      origin: process.env.FRONTEND_URL || "http://localhost:5173",
+      origin: createCorsOriginCallback(allowedOrigins),
       credentials: true
     }
   });

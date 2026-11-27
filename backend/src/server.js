@@ -34,6 +34,12 @@ import userRoute from "./routes/user.js";
 import accountTier from "./routes/accountTier.js";
 import metricsRoutes from "./routes/metrics.js";
 import auditLogsRoutes from "./routes/auditLogs.js";
+import internalProxyRoutes from "./routes/internalProxy.js";
+import {
+  resolveTrustProxySetting,
+  resolveAllowedOrigins,
+  createCorsOriginCallback
+} from "./utils/networkConfig.js";
 import { startStatsWorker } from "./services/statsWorker.js";
 import previewMetricsRoutes from "./routes/previewMetrics.js";
 import devSim from "./routes/devSimulate.js"; // Development simulation routes
@@ -45,23 +51,18 @@ import { runStartupReconciliation } from "./services/reconciliationService.js";
 
 const app = express();
 app.disable("x-powered-by");
+app.set("trust proxy", resolveTrustProxySetting());
 app.use(securityHeaders);
 const server = http.createServer(app);
 
 app.use(requestContextMiddleware);
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
-const allowedOrigins = Array.from(new Set([FRONTEND_URL, "http://localhost:5173"]));
+const allowedOrigins = resolveAllowedOrigins();
 
 app.use(
   cors({
-    origin: (origin, callback) => {
-      // Allow requests with no origin (like curl, mobile, or same-origin)
-      if (!origin || allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-      return callback(null, false);
-    },
+    origin: createCorsOriginCallback(allowedOrigins),
     credentials: true,
   })
 );
@@ -227,6 +228,7 @@ app.use("/api/account", accountTier);
 
 app.use("/webhooks/github", webhookRateLimiter);
 app.use("/", githubWebhook);
+app.use("/internal", internalProxyRoutes);
 
 // Development simulation routes - strictly disabled in production
 if (process.env.NODE_ENV !== "production") {

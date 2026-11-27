@@ -11,6 +11,7 @@
     "restore:db": "node scripts/restoreDb.js",
     "rotate:keys": "node scripts/rotateKeys.js",
     "benchmark": "node scripts/benchmark.js",
+    "preflight": "node scripts/preflight.js",
     "test": "node --test"
   },
   "keywords": [],
