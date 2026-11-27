@@ -143,6 +143,8 @@ jobs:
 
       - name: Validate Dockerfiles syntax
         run: |
+          docker buildx build --file backend/Dockerfile --check backend
+          docker buildx build --file frontend/Dockerfile --check frontend
           for file in backend/deploy-templates/*.Dockerfile; do
             echo "::group::Validating $file"
             docker buildx build --file "$file" --check backend/deploy-templates
