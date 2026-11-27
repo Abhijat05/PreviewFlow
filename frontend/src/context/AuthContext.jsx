@@ -86,19 +86,19 @@ export function AuthProvider({ children }) {
     };
   }, [fetchUserProfile]);
 
-  const login = (newToken) => {
+  const login = useCallback((newToken) => {
     localStorage.setItem("token", newToken);
     setToken(newToken);
     setTier(getFallbackTier(newToken));
     fetchUserProfile(newToken);
-  };
+  }, [fetchUserProfile]);
 
-  const logout = () => {
+  const logout = useCallback(() => {
     localStorage.removeItem("token");
     setToken(null);
     setUser(null);
     setTier("FREE");
-  };
+  }, []);
 
   return (
     <AuthContext.Provider value={{ token, user, tier, login, logout, loading, refreshUser }}>

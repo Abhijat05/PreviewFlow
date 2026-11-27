@@ -6,6 +6,7 @@ import { cloneRepo } from "./repoService.js";
 import { buildPreview, removeContainer, removeImage, releasePortInMemory } from "./dockerService.js";
 import { releasePort, releasePreviewPorts } from "./portService.js";
 import { enqueueBuild, TERMINAL_BUILD_STATUSES } from "./buildQueueService.js";
+import { decryptSecret } from "./cryptoService.js";
 
 /**
  * In-process registry of running build AbortControllers keyed by buildId.
@@ -85,8 +86,9 @@ export async function resolvePRHeadSha({ repoOwner, repoName, prNumber, accessTo
       Accept: "application/vnd.github+json",
       "User-Agent": "PreviewFlow-Orchestrator"
     };
-    if (accessToken) {
-      headers.Authorization = `Bearer ${accessToken}`;
+    const plainToken = decryptSecret(accessToken);
+    if (plainToken) {
+      headers.Authorization = `Bearer ${plainToken}`;
     }
 
     const res = await fetch(
@@ -366,7 +368,7 @@ export async function executeBuildJob(
       ref: job.branch,
       commitSha: job.commitSha,
       prNumber: previewContext.prNumber,
-      accessToken: project.accessToken,
+      accessToken: decryptSecret(project.accessToken),
       abortSignal: controller.signal
     });
 
@@ -599,7 +601,7 @@ export async function runDirectBuild({
     ref,
     commitSha,
     prNumber,
-    accessToken: project.accessToken
+    accessToken: decryptSecret(project.accessToken)
   });
 
   try {

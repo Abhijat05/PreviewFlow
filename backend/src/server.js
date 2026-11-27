@@ -3,6 +3,7 @@ dotenv.config();
 
 import express from "express";
 import http from "http";
+import crypto from "crypto";
 import cors from "cors";
 import passport from "./auth.js";
 import jwt from "jsonwebtoken";
@@ -10,6 +11,14 @@ import bodyParser from "body-parser";
 import morgan from "morgan";
 import { prisma } from "./db.js";
 import { initSocket } from "./socket.js";
+import { securityHeaders } from "./middleware/securityHeaders.js";
+import {
+  authRateLimiter,
+  webhookRateLimiter,
+  rebuildRateLimiter,
+  apiRateLimiter
+} from "./middleware/rateLimiter.js";
+import { validateProductionConfig } from "./utils/configValidation.js";
 
 import githubRepos from "./routes/githubRepos.js";
 import connectRepo from "./routes/connectRepo.js";
@@ -30,6 +39,8 @@ import { executeBuildJob } from "./services/buildOrchestrator.js";
 import { runStartupReconciliation } from "./services/reconciliationService.js";
 
 const app = express();
+app.disable("x-powered-by");
+app.use(securityHeaders);
 const server = http.createServer(app);
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
@@ -50,9 +61,10 @@ app.use(
 
 app.use(morgan("dev"));
 
-// Raw-body JSON parser for GitHub webhook HMAC verification
+// Raw-body JSON parser for GitHub webhook HMAC verification with explicit payload size limit
 app.use(
   bodyParser.json({
+    limit: "2mb",
     verify: (req, res, buf) => {
       req.rawBody = buf.toString("utf8");
     },
@@ -60,6 +72,26 @@ app.use(
 );
 
 app.use(passport.initialize());
+
+// Single-use short-lived OAuth exchange code store (60s TTL)
+const pendingAuthCodes = new Map();
+const AUTH_CODE_TTL_MS = 60_000;
+
+export function issueAuthExchangeCode(token) {
+  if (pendingAuthCodes.size > 10000) {
+    // Evict expired entries first under high load
+    const now = Date.now();
+    for (const [k, v] of pendingAuthCodes.entries()) {
+      if (v.expiresAt < now) pendingAuthCodes.delete(k);
+    }
+  }
+  const code = crypto.randomBytes(32).toString("hex");
+  const expiresAt = Date.now() + AUTH_CODE_TTL_MS;
+  pendingAuthCodes.set(code, { token, expiresAt });
+  const t = setTimeout(() => pendingAuthCodes.delete(code), AUTH_CODE_TTL_MS);
+  if (t.unref) t.unref();
+  return code;
+}
 
 // Health check endpoint for uptime monitoring & container orchestrators
 app.get("/health", (req, res) => {
@@ -90,10 +122,11 @@ app.get("/health/ready", async (req, res) => {
   }
 });
 
-app.get("/auth/github", passport.authenticate("github"));
+app.get("/auth/github", authRateLimiter, passport.authenticate("github"));
 
 app.get(
   "/auth/github/callback",
+  authRateLimiter,
   passport.authenticate("github", { session: false, failureRedirect: "/" }),
   async (req, res) => {
     try {
@@ -107,19 +140,19 @@ app.get(
         return res.status(401).send("user_not_found");
       }
 
+      // Never embed GitHub OAuth accessToken inside client-held JWT
       const token = jwt.sign(
         {
           userId: freshUser.id,
-          accessToken: user.accessToken,
           tier: freshUser.tier,
         },
         process.env.JWT_SECRET,
         { expiresIn: "7d" }
       );
 
-      return res.redirect(
-        `${FRONTEND_URL}/auth/success?token=${token}`
-      );
+      // Redirect with single-use short-lived code instead of raw JWT in URL
+      const code = issueAuthExchangeCode(token);
+      return res.redirect(`${FRONTEND_URL}/auth/success?code=${code}`);
     } catch (err) {
       console.error("OAuth callback error:", err);
       return res.status(500).send("auth_failed");
@@ -127,6 +160,24 @@ app.get(
   }
 );
 
+app.post("/auth/exchange", authRateLimiter, (req, res) => {
+  const { code } = req.body || {};
+  if (!code || typeof code !== "string") {
+    return res.status(400).json({ error: "missing_code" });
+  }
+
+  const entry = pendingAuthCodes.get(code);
+  pendingAuthCodes.delete(code);
+
+  if (!entry || entry.expiresAt < Date.now()) {
+    return res.status(401).json({ error: "invalid_or_expired_code" });
+  }
+
+  return res.json({ token: entry.token });
+});
+
+app.use("/api/preview/:id/rebuild", rebuildRateLimiter);
+app.use("/api", apiRateLimiter);
 app.use("/api", githubRepos);
 app.use("/api", connectRepo);
 app.use("/api", createWebhook);
@@ -137,6 +188,7 @@ app.use("/api/user", userRoute);
 app.use("/api/previews", previewMetricsRoutes);
 app.use("/api/account", accountTier);
 
+app.use("/webhooks/github", webhookRateLimiter);
 app.use("/", githubWebhook);
 
 // Development simulation routes - strictly disabled in production
@@ -205,6 +257,7 @@ export async function shutdownServer({ disconnectDb = true, force = false } = {}
 }
 
 if (!isTest) {
+  validateProductionConfig();
   const shouldRunApi = PREVIEWFLOW_MODE === "all" || PREVIEWFLOW_MODE === "api";
   const shouldRunWorker = PREVIEWFLOW_MODE === "all" || PREVIEWFLOW_MODE === "worker";
 

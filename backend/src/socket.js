@@ -1,20 +1,55 @@
+// backend/src/socket.js
 import { Server } from "socket.io";
 import jwt from "jsonwebtoken";
 import { prisma } from "./db.js";
 
 let io;
+const AUTH_TIMEOUT_MS = Number(process.env.SOCKET_AUTH_TIMEOUT_MS) || 5000;
+const MAX_SOCKETS_PER_USER = Number(process.env.MAX_SOCKETS_PER_USER) || 20;
 
 export function initSocket(server) {
+  const userSocketIds = new Map();
+
   io = new Server(server, {
     cors: {
       origin: process.env.FRONTEND_URL || "http://localhost:5173",
       credentials: true
-    },
+    }
   });
 
+  function trackUserSocket(userId, socketId) {
+    let set = userSocketIds.get(userId);
+    if (!set) {
+      set = new Set();
+      userSocketIds.set(userId, set);
+    }
+    set.add(socketId);
+    return set.size;
+  }
+
+  function untrackUserSocket(userId, socketId) {
+    if (!userId) return;
+    const set = userSocketIds.get(userId);
+    if (set) {
+      set.delete(socketId);
+      if (set.size === 0) {
+        userSocketIds.delete(userId);
+      }
+    }
+  }
+
   io.on("connection", (socket) => {
-    // Client can register with { token } (for user-level dashboard events)
-    // or { token, previewId } (for preview-specific telemetry & logs)
+    let authenticated = false;
+
+    // Disconnect idle unauthenticated sockets that fail to register within timeout
+    const authTimer = setTimeout(() => {
+      if (!authenticated) {
+        socket.emit("error", "Authentication timeout");
+        socket.disconnect();
+      }
+    }, AUTH_TIMEOUT_MS);
+    if (authTimer.unref) authTimer.unref();
+
     socket.on("register", async (data) => {
       try {
         const { previewId, token } = data || {};
@@ -27,12 +62,31 @@ export function initSocket(server) {
 
         // Verify JWT
         const payload = jwt.verify(authToken, process.env.JWT_SECRET);
+        if (!payload?.userId) {
+          socket.emit("error", "Authentication failed");
+          return socket.disconnect();
+        }
+
+        const count = trackUserSocket(payload.userId, socket.id);
+        if (count > MAX_SOCKETS_PER_USER) {
+          untrackUserSocket(payload.userId, socket.id);
+          socket.emit("error", "Connection limit exceeded");
+          return socket.disconnect();
+        }
+
+        authenticated = true;
+        clearTimeout(authTimer);
         socket.userId = payload.userId;
 
         // Automatically join user's private channel
         socket.join(`user:${payload.userId}`);
 
-        if (previewId) {
+        if (previewId !== undefined && previewId !== null) {
+          if (typeof previewId !== "string" || !previewId.trim() || previewId.length > 64) {
+            socket.emit("error", "Invalid previewId");
+            return socket.disconnect();
+          }
+
           // Check preview belongs to this user
           const preview = await prisma.preview.findUnique({
             where: { id: previewId },
@@ -51,7 +105,7 @@ export function initSocket(server) {
 
           // Authorize and join preview rooms
           socket.join(`preview:${previewId}`);
-          socket.join(previewId); // backward compatibility for log streams
+          socket.join(previewId);
           socket.emit("registered", { previewId });
         } else {
           socket.emit("registered", { userId: payload.userId });
@@ -64,7 +118,8 @@ export function initSocket(server) {
     });
 
     socket.on("disconnect", () => {
-      // socket disconnected cleanly
+      clearTimeout(authTimer);
+      untrackUserSocket(socket.userId, socket.id);
     });
   });
 

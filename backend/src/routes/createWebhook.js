@@ -1,8 +1,11 @@
+// backend/src/routes/createWebhook.js
 import express from "express";
+import axios from "axios";
 import { requireAuth } from "../middleware/auth.js";
 import { getTierLimits } from "../middleware/tierLimits.js";
 import { prisma } from "../db.js";
-import axios from "axios";
+import { decryptSecret, encryptSecret } from "../services/cryptoService.js";
+import { isValidRepoCoordinates } from "../utils/validation.js";
 
 const router = express.Router();
 
@@ -16,11 +19,10 @@ export async function handleCreateWebhook(req, res) {
     if (!limits.allowWebhooks) {
       return res.status(403).json({
         error: "webhook_not_allowed",
-        message: "GitHub webhooks are only available on PRO and ENTERPRISE plans.",
+        message: "GitHub webhooks are only available on PRO and ENTERPRISE plans."
       });
     }
 
-    // Determine access token: check req.auth.accessToken or look up project
     const authAccessToken = req.auth?.accessToken;
 
     if (!projectId || typeof projectId !== "string") {
@@ -32,7 +34,11 @@ export async function handleCreateWebhook(req, res) {
       return res.status(404).json({ error: "project_not_found" });
     }
 
-    const ghAccessToken = project.accessToken || authAccessToken;
+    if (!isValidRepoCoordinates(project.repoOwner, project.repoName)) {
+      return res.status(400).json({ error: "invalid_repo_identifier" });
+    }
+
+    const ghAccessToken = decryptSecret(project.accessToken) || authAccessToken;
     if (!ghAccessToken) {
       return res.status(400).json({
         error: "missing_github_token",
@@ -48,9 +54,9 @@ export async function handleCreateWebhook(req, res) {
       });
     }
 
-    // Standardized webhook endpoint matching server.js & githubWebhook.js
+    const plainWebhookSecret = decryptSecret(project.webhookSecret);
     const webhookUrl = `${baseUrl.replace(/\/+$/, "")}/webhooks/github`;
-    const githubApiUrl = `https://api.github.com/repos/${project.repoOwner}/${project.repoName}/hooks`;
+    const githubApiUrl = `https://api.github.com/repos/${encodeURIComponent(project.repoOwner)}/${encodeURIComponent(project.repoName)}/hooks`;
 
     const ghResponse = await axios.post(
       githubApiUrl,
@@ -59,16 +65,16 @@ export async function handleCreateWebhook(req, res) {
         config: {
           url: webhookUrl,
           content_type: "json",
-          secret: project.webhookSecret,
+          secret: plainWebhookSecret
         },
         events: ["pull_request"],
-        active: true,
+        active: true
       },
       {
         headers: {
           Authorization: `Bearer ${ghAccessToken}`,
-          Accept: "application/vnd.github.v3+json",
-        },
+          Accept: "application/vnd.github.v3+json"
+        }
       }
     );
 
@@ -79,16 +85,15 @@ export async function handleCreateWebhook(req, res) {
         where: { id: projectId },
         data: {
           webhookId,
-          accessToken: ghAccessToken
-        },
+          accessToken: encryptSecret(ghAccessToken)
+        }
       });
     }
 
-    return res.json({ ok: true, webhook: ghResponse.data });
+    return res.json({ ok: true, webhookId });
   } catch (err) {
     console.error("create-webhook error:", err?.response?.data || err?.message || err);
-    const ghError = err?.response?.data?.message || err?.message;
-    return res.status(500).json({ error: "internal_error", message: ghError });
+    return res.status(500).json({ error: "webhook_creation_failed" });
   }
 }
 

@@ -4,7 +4,7 @@ import path from "path";
 import { spawn, execFile, execFileSync } from "child_process";
 import { prisma } from "../db.js";
 import { getIO } from "../socket.js";
-import { resolveProjectConfig } from "./detectProjectType.js";
+import { resolveProjectConfig, assertNoUnsafeSymlinks } from "./detectProjectType.js";
 import { getPortPoolForTier } from "../middleware/subscription.js";
 import { normalizeTier } from "../middleware/tierLimits.js";
 import {
@@ -32,6 +32,8 @@ export const DEFAULT_DOCKER_RUN_TIMEOUT_MS = Number(process.env.DOCKER_RUN_TIMEO
 export const DEFAULT_CONTAINER_READY_TIMEOUT_MS = Number(process.env.CONTAINER_READY_TIMEOUT_MS) || 30_000;
 export const DEFAULT_HEALTH_PROBE_INTERVAL_MS = Number(process.env.CONTAINER_HEALTH_PROBE_INTERVAL_MS) || 500;
 export const DEFAULT_IMAGE_MAX_AGE_HOURS = Number(process.env.DOCKER_IMAGE_MAX_AGE_HOURS) || 168;
+export const MAX_BUILD_LOG_BYTES = Number(process.env.MAX_BUILD_LOG_BYTES) || 512 * 1024;
+export const DEFAULT_ISOLATED_NETWORK = process.env.PREVIEW_DOCKER_NETWORK || "previewflow-sandbox";
 
 // Ensure common Windows Docker directories are present in process.env.PATH
 if (process.platform === "win32") {
@@ -495,8 +497,62 @@ export function buildContainerLabels({
 }
 
 /**
+ * Ensures an isolated bridge network with inter-container communication disabled (`enable_icc=false`)
+ * exists for running untrusted preview containers safely.
+ */
+export async function ensureIsolatedNetwork({
+  networkName = DEFAULT_ISOLATED_NETWORK,
+  execFn = null
+} = {}) {
+  if (!networkName || process.env.PREVIEW_DOCKER_ISOLATION === "false") {
+    return null;
+  }
+
+  const runExec =
+    execFn ||
+    ((bin, args) =>
+      new Promise((resolve) => {
+        execFile(bin, args, (err, stdout) => resolve({ err, stdout: stdout || "" }));
+      }));
+
+  const dockerBin = getDockerExecutable();
+  const inspect = await runExec(dockerBin, ["network", "inspect", networkName]);
+  if (!inspect.err) {
+    return networkName;
+  }
+
+  const create = await runExec(dockerBin, [
+    "network",
+    "create",
+    "--driver",
+    "bridge",
+    "--opt",
+    "com.docker.network.bridge.enable_icc=false",
+    networkName
+  ]);
+
+  return create.err ? null : networkName;
+}
+
+/**
+ * Resolves preview URL using wildcard subdomain isolation (`PREVIEW_BASE_DOMAIN`) in production
+ * to prevent cross-preview cookie/storage leakage, or `http://localhost:<port>` locally.
+ */
+export function resolvePreviewUrl({ previewId, prNumber, buildNumber, port }) {
+  const baseDomain = (process.env.PREVIEW_BASE_DOMAIN || "").trim().replace(/^\.+/, "");
+  if (baseDomain) {
+    const protocol = (process.env.PREVIEW_URL_PROTOCOL || "https").trim();
+    const shortId = String(previewId || "prev").slice(0, 6).toLowerCase().replace(/[^a-z0-9]/g, "") || "prev";
+    const safePr = String(prNumber || "1").replace(/[^0-9]/g, "") || "1";
+    const safeBuild = String(buildNumber || "1").replace(/[^0-9]/g, "") || "1";
+    return `${protocol}://pr-${safePr}-b${safeBuild}-${shortId}.${baseDomain}`;
+  }
+  return `http://localhost:${port}`;
+}
+
+/**
  * Constructs hardened `docker run` argument array with resource caps,
- * minimal capabilities, tracing labels, and loopback port binding.
+ * minimal capabilities, isolated networking, log caps, tracing labels, and loopback port binding.
  */
 export function buildRunArgs({
   containerName,
@@ -504,10 +560,11 @@ export function buildRunArgs({
   containerPort,
   imageName,
   tier,
-  labels = []
+  labels = [],
+  networkName = null
 }) {
   const limits = resolveContainerResourceLimits(tier);
-  return [
+  const args = [
     "run",
     "-d",
     "--name",
@@ -520,6 +577,12 @@ export function buildRunArgs({
     limits.memorySwap,
     "--cpus",
     limits.cpus,
+    "--ulimit",
+    "nofile=1024:2048",
+    "--log-opt",
+    "max-size=10m",
+    "--log-opt",
+    "max-file=2",
     "--security-opt",
     "no-new-privileges",
     "--cap-drop",
@@ -532,11 +595,18 @@ export function buildRunArgs({
     "SETGID",
     "--cap-add",
     "NET_BIND_SERVICE",
-    ...labels,
-    "-p",
-    `127.0.0.1:${assignedPort}:${containerPort}`,
-    imageName
+    "--add-host",
+    "metadata.google.internal:127.0.0.1",
+    "--add-host",
+    "instance-data:127.0.0.1"
   ];
+
+  if (networkName) {
+    args.push("--network", networkName);
+  }
+
+  args.push(...labels, "-p", `127.0.0.1:${assignedPort}:${containerPort}`, imageName);
+  return args;
 }
 
 /* ===========================
@@ -758,10 +828,20 @@ export async function buildPreview({
   }
 
   let logs = "";
+  let logsTruncated = false;
   const push = (chunk) => {
-    logs += chunk;
+    const str = String(chunk || "");
+    if (!logsTruncated) {
+      if (logs.length + str.length > MAX_BUILD_LOG_BYTES) {
+        const remaining = Math.max(0, MAX_BUILD_LOG_BYTES - logs.length);
+        logs += str.slice(0, remaining) + "\n\n[Log Truncated: Maximum build log size exceeded]\n";
+        logsTruncated = true;
+      } else {
+        logs += str;
+      }
+    }
     try {
-      getIO().to(previewId).emit("log", { chunk });
+      getIO().to(previewId).emit("log", { chunk: str });
     } catch {
       // ignore socket errors
     }
@@ -828,6 +908,9 @@ export async function buildPreview({
 
     const imageName = generateImageTag(project, prNumber, nextBuildNumber, commitSha);
 
+    // Security audit: Reject any symlinks escaping cloned repository root before build
+    assertNoUnsafeSymlinks(repoPath);
+
     // Detect project framework & configuration dynamically
     const projectConfig = resolveProjectConfig(repoPath);
     push(`\n[Detector] Identified project type as: ${projectConfig.type} (Internal Port: ${projectConfig.containerPort})\n`);
@@ -847,7 +930,8 @@ export async function buildPreview({
       throw createAbortError("Build aborted after image build");
     }
 
-    // 2. Hardened Container Run with tracing labels & tier resource limits
+    // 2. Hardened Container Run with isolated Docker network, tracing labels & tier resource limits
+    const isolatedNetwork = await ensureIsolatedNetwork();
     const labels = buildContainerLabels({
       previewId,
       buildId,
@@ -864,7 +948,8 @@ export async function buildPreview({
       containerPort,
       imageName,
       tier: userTier,
-      labels
+      labels,
+      networkName: isolatedNetwork
     });
 
     push(`\n> docker ${runArgs.join(" ")}\n`);
@@ -889,7 +974,12 @@ export async function buildPreview({
       );
     }
 
-    const url = `http://localhost:${assignedPort}`;
+    const url = resolvePreviewUrl({
+      previewId,
+      prNumber,
+      buildNumber: nextBuildNumber,
+      port: assignedPort
+    });
     const buildCompletedAt = new Date();
 
     if (!managedByOrchestrator) {

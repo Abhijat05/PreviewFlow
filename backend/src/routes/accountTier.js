@@ -71,7 +71,6 @@ export async function handleChangeTier(req, res) {
       const token = jwt.sign(
         {
           userId: updatedUser.id,
-          accessToken: req.auth?.accessToken,
           tier: updatedUser.tier,
         },
         process.env.JWT_SECRET,
@@ -177,7 +176,6 @@ export async function handleChangeTier(req, res) {
       const token = jwt.sign(
         {
           userId: updatedUser.id,
-          accessToken: req.auth?.accessToken,
           tier: updatedUser.tier,
         },
         process.env.JWT_SECRET,
@@ -247,7 +245,6 @@ export async function handleChangeTier(req, res) {
     const token = jwt.sign(
       {
         userId: user.id,
-        accessToken: req.auth?.accessToken,
         tier: targetTier,
       },
       process.env.JWT_SECRET,

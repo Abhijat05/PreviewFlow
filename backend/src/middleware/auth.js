@@ -1,5 +1,7 @@
+// backend/src/middleware/auth.js
 import jwt from "jsonwebtoken";
 import { prisma } from "../db.js";
+import { decryptSecret } from "../services/cryptoService.js";
 
 export async function decodeAuth(req) {
   const header = req.headers?.authorization || "";
@@ -10,11 +12,16 @@ export async function decodeAuth(req) {
   const user = await prisma.user.findUnique({ where: { id: payload.userId } });
   if (!user) throw new Error("User not found");
 
+  // Prefer encrypted server-side GitHub token stored on User; fall back gracefully to legacy JWT claim if present
+  const resolvedAccessToken =
+    decryptSecret(user.accessToken) ||
+    (payload.accessToken ? decryptSecret(payload.accessToken) : null);
+
   return {
     ...payload,
     user,
     userId: user.id,
-    accessToken: payload.accessToken,
+    accessToken: resolvedAccessToken,
     tier: user.tier // DB truth for tier, ensuring fresh permissions
   };
 }

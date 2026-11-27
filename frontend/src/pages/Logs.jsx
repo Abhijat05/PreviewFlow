@@ -7,6 +7,12 @@ import { useAuth } from "../context/AuthContext.jsx";
 import { X, Copy, Loader2, ArrowDownCircle, Lock } from "lucide-react";
 
 const ALLOW_SOCKET_TIERS = ['PRO', 'ENTERPRISE'];
+const MAX_LOG_CHARS = 500_000;
+
+function trimLogTail(text) {
+  if (!text || text.length <= MAX_LOG_CHARS) return text;
+  return "... [earlier logs truncated] ...\n" + text.slice(-MAX_LOG_CHARS);
+}
 
 const highlightKeywords = (text) => {
   if (!text) return "";
@@ -108,7 +114,7 @@ export default function Logs({ previewId, onClose }) {
         const toAppend = bufferRef.current;
         bufferRef.current = "";
         if (toAppend) {
-          setLogs((prev) => prev + toAppend);
+          setLogs((prev) => trimLogTail(prev + toAppend));
         }
       });
     }
@@ -140,7 +146,7 @@ export default function Logs({ previewId, onClose }) {
     })
       .then((res) => { 
         if (isMounted.current) {
-          setLogs((res.data.logs || "").replace(/\r/g, "")); 
+          setLogs(trimLogTail((res.data.logs || "").replace(/\r/g, ""))); 
           setStatus("ready"); 
         }
       })

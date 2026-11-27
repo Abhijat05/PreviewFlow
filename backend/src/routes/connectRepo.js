@@ -1,65 +1,127 @@
+// backend/src/routes/connectRepo.js
 import express from "express";
 import crypto from "crypto";
 import axios from "axios";
 import { prisma } from "../db.js";
 import { requireSubscription, assertRepoQuota } from "../middleware/subscription.js";
+import { encryptSecret, serializeProjectSafe } from "../services/cryptoService.js";
+import { isValidRepoCoordinates } from "../utils/validation.js";
 
 const router = express.Router();
 
 const WEBHOOK_TIERS = ["PRO", "ENTERPRISE"];
+
+async function defaultRepoAccessVerifier({ repoOwner, repoName, accessToken }) {
+  try {
+    const res = await axios.get(
+      `https://api.github.com/repos/${encodeURIComponent(repoOwner)}/${encodeURIComponent(repoName)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/vnd.github+json"
+        },
+        timeout: 5000
+      }
+    );
+    const perms = res.data?.permissions || {};
+    return Boolean(perms.admin || perms.push || perms.maintain);
+  } catch {
+    return false;
+  }
+}
+
+let repoAccessVerifier = defaultRepoAccessVerifier;
+
+export function setRepoAccessVerifier(fn) {
+  repoAccessVerifier = fn || defaultRepoAccessVerifier;
+}
+
+export function resetRepoAccessVerifier() {
+  repoAccessVerifier = defaultRepoAccessVerifier;
+}
 
 export async function handleConnectRepo(req, res) {
   try {
     const { user, tier = "FREE", accessToken } = req.sub;
     const { repoOwner, repoName } = req.body || {};
 
-    // 1️⃣ Input validation
+    // 1. Input validation & slug containment
     if (typeof repoOwner !== "string" || typeof repoName !== "string") {
       return res.status(400).json({ error: "invalid_input_format" });
     }
 
-    if (!repoOwner.trim() || !repoName.trim()) {
+    const cleanOwner = repoOwner.trim();
+    const cleanRepo = repoName.trim();
+
+    if (!cleanOwner || !cleanRepo) {
       return res.status(400).json({ error: "missing_repo_details" });
     }
 
-    // 2️⃣ Enforce repo quota
+    if (!isValidRepoCoordinates(cleanOwner, cleanRepo)) {
+      return res.status(400).json({ error: "invalid_repo_identifier" });
+    }
+
+    // 2. Enforce repo quota
     try {
       await assertRepoQuota(user);
     } catch (e) {
       return res.status(429).json({ error: e.message, code: e.code });
     }
 
-    // 3️⃣ Duplicate project check
+    // 3. Duplicate project check (return masked DTO)
     const existing = await prisma.project.findFirst({
-      where: { userId: user.id, repoOwner, repoName }
+      where: { userId: user.id, repoOwner: cleanOwner, repoName: cleanRepo }
     });
 
     if (existing) {
-      return res.status(200).json({ success: true, project: existing, note: "already_connected" });
+      return res.status(200).json({
+        success: true,
+        project: serializeProjectSafe(existing),
+        note: "already_connected"
+      });
     }
 
-    // 4️⃣ Generate webhook secret
-    const webhookSecret = crypto.randomBytes(32).toString("hex");
+    // 4. Verify authenticated user has write/admin access on GitHub repository
+    if (accessToken) {
+      const hasAccess = await repoAccessVerifier({
+        repoOwner: cleanOwner,
+        repoName: cleanRepo,
+        accessToken
+      });
+      if (!hasAccess) {
+        return res.status(403).json({
+          error: "insufficient_repo_permissions",
+          message: "You must have push or admin access to connect this repository."
+        });
+      }
+    } else if (process.env.NODE_ENV === "production") {
+      return res.status(401).json({ error: "missing_github_token" });
+    }
 
-    // 5️⃣ DB write preserving accessToken
+    // 5. Generate webhook secret & encrypt sensitive credentials at rest
+    const plainWebhookSecret = crypto.randomBytes(32).toString("hex");
+    const encryptedWebhookSecret = encryptSecret(plainWebhookSecret);
+    const encryptedAccessToken = accessToken ? encryptSecret(accessToken) : null;
+
+    // 6. DB write storing encrypted secrets
     const project = await prisma.project.create({
       data: {
         userId: user.id,
-        repoOwner,
-        repoName,
-        webhookSecret,
-        accessToken: accessToken || null
+        repoOwner: cleanOwner,
+        repoName: cleanRepo,
+        webhookSecret: encryptedWebhookSecret,
+        accessToken: encryptedAccessToken
       }
     });
 
-    // 6️⃣ Automatic webhook registration for PRO / ENTERPRISE
+    // 7. Automatic webhook registration for PRO / ENTERPRISE (using plaintext webhook secret)
     let webhookCreated = false;
     if (WEBHOOK_TIERS.includes(tier.toUpperCase()) && accessToken && process.env.PUBLIC_WEBHOOK_URL) {
       try {
         const webhookURL = `${process.env.PUBLIC_WEBHOOK_URL.replace(/\/+$/, "")}/webhooks/github`;
 
         const hookRes = await axios.post(
-          `https://api.github.com/repos/${repoOwner}/${repoName}/hooks`,
+          `https://api.github.com/repos/${encodeURIComponent(cleanOwner)}/${encodeURIComponent(cleanRepo)}/hooks`,
           {
             name: "web",
             active: true,
@@ -67,7 +129,7 @@ export async function handleConnectRepo(req, res) {
             config: {
               url: webhookURL,
               content_type: "json",
-              secret: webhookSecret
+              secret: plainWebhookSecret
             }
           },
           { headers: { Authorization: `Bearer ${accessToken}` } }
@@ -87,8 +149,11 @@ export async function handleConnectRepo(req, res) {
       }
     }
 
-    return res.json({ success: true, project, webhookCreated });
-
+    return res.json({
+      success: true,
+      project: serializeProjectSafe(project),
+      webhookCreated
+    });
   } catch (err) {
     console.error("connect-repo error:", err);
     return res.status(500).json({ success: false, error: "connection_failed" });

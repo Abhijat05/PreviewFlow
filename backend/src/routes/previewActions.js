@@ -10,6 +10,7 @@ import {
   emitPreviewStatus
 } from "../services/buildOrchestrator.js";
 import { getBuildHistory } from "../services/buildQueueService.js";
+import { enforceBuildQuota } from "../services/quotaService.js";
 
 const router = express.Router();
 
@@ -18,24 +19,8 @@ export function emitScopedStatus(previewId, userId, payload) {
 }
 
 /* ------------------------ HELPERS ------------------------ */
-export async function enforceBuildLimit(userId, tier) {
-  const limits = getTierLimits(tier);
-
-  const activeBuilds = await prisma.preview.count({
-    where: {
-      status: "building",
-      project: { userId }
-    }
-  });
-
-  if (activeBuilds >= limits.maxConcurrentBuilds) {
-    return {
-      allowed: false,
-      message: `Tier ${tier} allows only ${limits.maxConcurrentBuilds} concurrent build(s).`
-    };
-  }
-
-  return { allowed: true };
+export async function enforceBuildLimit(userId, tier, { previewId = null, isNewPreview = false } = {}) {
+  return enforceBuildQuota({ userId, tier, previewId, isNewPreview });
 }
 
 let customAsyncRebuildWorker = null;
@@ -82,11 +67,14 @@ export async function handleRebuildPreview(req, res) {
       });
     }
 
-    /* 3. Enforce Tier Build Limits */
-    const check = await enforceBuildLimit(userId, tier);
+    /* 3. Enforce Unified Tier Build & Preview Quotas */
+    const check = await enforceBuildLimit(userId, tier, {
+      previewId: preview.id,
+      isNewPreview: preview.status === "deleted"
+    });
     if (!check.allowed) {
       return res.status(429).json({
-        error: "build_limit_reached",
+        error: check.code || "build_limit_reached",
         message: check.message
       });
     }
