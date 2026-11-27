@@ -7,6 +7,9 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "postinstall": "prisma generate",
+    "backup:db": "node scripts/backupDb.js",
+    "restore:db": "node scripts/restoreDb.js",
+    "rotate:keys": "node scripts/rotateKeys.js",
     "test": "node --test"
   },
   "keywords": [],
