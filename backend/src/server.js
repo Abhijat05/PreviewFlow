@@ -6,7 +6,7 @@ import http from "http";
 import crypto from "crypto";
 import cors from "cors";
 import passport from "./auth.js";
-import jwt from "jsonwebtoken";
+import { signAuthToken, decodeAuthToken } from "./utils/jwtHelper.js";
 import bodyParser from "body-parser";
 import { prisma } from "./db.js";
 import { initSocket } from "./socket.js";
@@ -154,12 +154,11 @@ app.get(
       extendContext({ userId: freshUser.id });
 
       // Never embed GitHub OAuth accessToken inside client-held JWT
-      const token = jwt.sign(
+      const token = signAuthToken(
         {
           userId: freshUser.id,
           tier: freshUser.tier,
         },
-        process.env.JWT_SECRET,
         { expiresIn: "7d" }
       );
 
@@ -201,7 +200,7 @@ app.post("/auth/exchange", authRateLimiter, async (req, res) => {
     return res.status(401).json({ error: "invalid_or_expired_code" });
   }
 
-  const decoded = jwt.decode(entry.token);
+  const decoded = decodeAuthToken(entry.token);
   await recordHttpAudit(req, {
     actorUserId: decoded?.userId || null,
     action: "AUTH_EXCHANGE",

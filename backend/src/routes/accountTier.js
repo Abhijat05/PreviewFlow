@@ -1,6 +1,5 @@
 // backend/src/routes/accountTier.js
 import express from "express";
-import jwt from "jsonwebtoken";
 import { prisma } from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { getTierLimits, compareTier, normalizeTier } from "../middleware/tierLimits.js";
@@ -8,6 +7,7 @@ import { removeContainer } from "../services/dockerService.js";
 import { releasePreviewPorts } from "../services/portService.js";
 import { logger } from "../utils/logger.js";
 import { recordHttpAudit } from "../services/auditService.js";
+import { signAuthToken } from "../utils/jwtHelper.js";
 
 const router = express.Router();
 
@@ -78,12 +78,11 @@ export async function handleChangeTier(req, res) {
         data: { tier: targetTier },
       });
 
-      const token = jwt.sign(
+      const token = signAuthToken(
         {
           userId: updatedUser.id,
           tier: updatedUser.tier,
         },
-        process.env.JWT_SECRET,
         { expiresIn: "7d" }
       );
 
@@ -192,12 +191,11 @@ export async function handleChangeTier(req, res) {
         data: { tier: targetTier },
       });
 
-      const token = jwt.sign(
+      const token = signAuthToken(
         {
           userId: updatedUser.id,
           tier: updatedUser.tier,
         },
-        process.env.JWT_SECRET,
         { expiresIn: "7d" }
       );
 
@@ -271,12 +269,11 @@ export async function handleChangeTier(req, res) {
       });
     });
 
-    const token = jwt.sign(
+    const token = signAuthToken(
       {
         userId: user.id,
         tier: targetTier,
       },
-      process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
 

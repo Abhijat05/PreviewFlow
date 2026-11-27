@@ -1,15 +1,15 @@
 // backend/src/middleware/auth.js
-import jwt from "jsonwebtoken";
 import { prisma } from "../db.js";
 import { decryptSecret } from "../services/cryptoService.js";
 import { extendContext } from "../utils/logger.js";
+import { verifyAuthToken } from "../utils/jwtHelper.js";
 
 export async function decodeAuth(req) {
   const header = req.headers?.authorization || "";
   const token = header.startsWith("Bearer ") ? header.split(" ")[1] : null;
   if (!token) throw new Error("Missing token");
 
-  const payload = jwt.verify(token, process.env.JWT_SECRET);
+  const payload = verifyAuthToken(token);
   const user = await prisma.user.findUnique({ where: { id: payload.userId } });
   if (!user) throw new Error("User not found");
 

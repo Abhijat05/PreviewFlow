@@ -1,10 +1,10 @@
 // backend/src/socket.js
 import { Server } from "socket.io";
-import jwt from "jsonwebtoken";
 import { prisma } from "./db.js";
 import { logger } from "./utils/logger.js";
 import { recordAuditEvent } from "./services/auditService.js";
 import { incActiveSockets, decActiveSockets } from "./services/metricsService.js";
+import { verifyAuthToken } from "./utils/jwtHelper.js";
 
 let io;
 const AUTH_TIMEOUT_MS = Number(process.env.SOCKET_AUTH_TIMEOUT_MS) || 5000;
@@ -65,8 +65,8 @@ export function initSocket(server) {
           return socket.disconnect();
         }
 
-        // Verify JWT
-        const payload = jwt.verify(authToken, process.env.JWT_SECRET);
+        // Verify JWT (supports zero-downtime key rotation via JWT_SECRET_PREVIOUS)
+        const payload = verifyAuthToken(authToken);
         if (!payload?.userId) {
           socket.emit("error", "Authentication failed");
           return socket.disconnect();

@@ -20,6 +20,26 @@ export function validateProductionConfig(env = process.env) {
     errors.push("ENCRYPTION_KEY must be at least 32 characters in production");
   }
 
+  if (env.JWT_SECRET_PREVIOUS) {
+    const prevJwts = String(env.JWT_SECRET_PREVIOUS)
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (prevJwts.some((s) => s.length < 32)) {
+      errors.push("All entries in JWT_SECRET_PREVIOUS must be at least 32 characters");
+    }
+  }
+
+  if (env.ENCRYPTION_KEY_PREVIOUS) {
+    const prevKeys = String(env.ENCRYPTION_KEY_PREVIOUS)
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (prevKeys.some((k) => k.length < 32)) {
+      errors.push("All entries in ENCRYPTION_KEY_PREVIOUS must be at least 32 characters");
+    }
+  }
+
   if (!env.DATABASE_URL) {
     errors.push("DATABASE_URL is required in production");
   }
