@@ -16,7 +16,8 @@ export function mockPrisma(overrides = {}) {
     "previewMetric",
     "build",
     "webhookDelivery",
-    "portAllocation"
+    "portAllocation",
+    "auditLog"
   ];
   const defaultMethods = [
     "findUnique",
