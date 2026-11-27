@@ -6,9 +6,10 @@ import request from "supertest";
 import app from "../../src/server.js";
 import { prisma } from "../../src/db.js";
 import { setPRHandlers } from "../../src/routes/githubWebhook.js";
+import { mockPrisma } from "../helpers/prismaMock.js";
 
 describe("5.2 GitHub Webhook API Integration Tests", () => {
-  let originalFindMany;
+  let prismaRestore;
 
   const webhookSecret = "test_webhook_secret_key_42";
   const mockProject = {
@@ -21,12 +22,13 @@ describe("5.2 GitHub Webhook API Integration Tests", () => {
   };
 
   beforeEach(() => {
-    originalFindMany = prisma.project.findMany;
+    const { restore } = mockPrisma();
+    prismaRestore = restore;
   });
 
   afterEach(() => {
-    prisma.project.findMany = originalFindMany;
     setPRHandlers(); // restores default handlers
+    if (prismaRestore) prismaRestore();
   });
 
   function signPayload(body, secret = webhookSecret) {

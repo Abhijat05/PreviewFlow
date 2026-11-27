@@ -19,15 +19,19 @@ import { prisma } from "../../src/db.js";
 describe("4.6 User Tier & Build Limits Unit Tests", () => {
   let originalProjectCount;
   let originalPreviewCount;
+  let originalBuildFindMany;
 
   beforeEach(() => {
     originalProjectCount = prisma.project.count;
     originalPreviewCount = prisma.preview.count;
+    originalBuildFindMany = prisma.build.findMany;
+    prisma.build.findMany = async () => [];
   });
 
   afterEach(() => {
     prisma.project.count = originalProjectCount;
     prisma.preview.count = originalPreviewCount;
+    prisma.build.findMany = originalBuildFindMany;
   });
 
   test("defines correct limits matching business specification for all four tiers", () => {

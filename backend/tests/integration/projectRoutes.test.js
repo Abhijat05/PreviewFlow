@@ -5,6 +5,8 @@ import request from "supertest";
 import app from "../../src/server.js";
 import { prisma } from "../../src/db.js";
 import { generateTestToken } from "../helpers/authHelper.js";
+import { isEncryptedSecret } from "../../src/services/cryptoService.js";
+import { setRepoAccessVerifier, resetRepoAccessVerifier } from "../../src/routes/connectRepo.js";
 
 describe("5.4 Project, Logs & Metrics API Integration Tests", () => {
   let originalFindUniqueUser;
@@ -45,6 +47,7 @@ describe("5.4 Project, Logs & Metrics API Integration Tests", () => {
   });
 
   afterEach(() => {
+    resetRepoAccessVerifier();
     prisma.user.findUnique = originalFindUniqueUser;
     prisma.preview.findUnique = originalFindUniquePreview;
     prisma.preview.findFirst = originalFindFirstPreview;
@@ -52,7 +55,7 @@ describe("5.4 Project, Logs & Metrics API Integration Tests", () => {
     prisma.project.findUnique = originalFindUniqueProject;
     prisma.project.findFirst = originalFindFirstProject;
     prisma.project.findMany = originalFindManyProject;
-    prisma.create = originalCreateProject;
+    prisma.project.create = originalCreateProject;
     prisma.project.count = originalCountProject;
     prisma.previewMetric.findMany = originalFindManyMetric;
   });
@@ -113,6 +116,7 @@ describe("5.4 Project, Logs & Metrics API Integration Tests", () => {
   });
 
   test("POST /api/connect-repo creates new project and generates webhook secret", async () => {
+    setRepoAccessVerifier(async () => true);
     prisma.project.count = async () => 0;
     prisma.project.findFirst = async () => null;
 
@@ -131,18 +135,23 @@ describe("5.4 Project, Logs & Metrics API Integration Tests", () => {
     assert.equal(res.body.success, true);
     assert.equal(createdProjectData.repoOwner, "facebook");
     assert.equal(createdProjectData.repoName, "react");
-    assert.ok(createdProjectData.webhookSecret.length >= 32);
+    assert.ok(isEncryptedSecret(createdProjectData.webhookSecret), "Secret must be encrypted at rest");
+    assert.equal(res.body.project.webhookSecret, undefined, "webhookSecret must NEVER leak in HTTP response");
+    assert.equal(res.body.project.accessToken, undefined, "accessToken must NEVER leak in HTTP response");
   });
 
   /* ---------------- PROJECTS LISTING ---------------- */
 
-  test("GET /api/projects returns user's connected projects with previews", async () => {
+  test("GET /api/projects returns user's connected projects with previews and masks secrets", async () => {
     const mockProjects = [
       {
         id: "p1",
         userId: testUserId,
         repoOwner: "org",
         repoName: "app",
+        webhookSecret: "enc:v1:abc:def:123",
+        accessToken: "enc:v1:abc:def:456",
+        webhookId: "wh_1",
         previews: [{ id: "prev_1", prNumber: 1, status: "live" }]
       }
     ];
@@ -159,6 +168,9 @@ describe("5.4 Project, Logs & Metrics API Integration Tests", () => {
     assert.equal(res.status, 200);
     assert.equal(res.body.length, 1);
     assert.equal(res.body[0].repoName, "app");
+    assert.equal(res.body[0].hasWebhook, true);
+    assert.equal(res.body[0].webhookSecret, undefined);
+    assert.equal(res.body[0].accessToken, undefined);
   });
 
   /* ---------------- LOGS ---------------- */

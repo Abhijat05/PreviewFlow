@@ -5,12 +5,14 @@ import { render, screen, act, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "../context/AuthContext.jsx";
+import AuthSuccess from "../pages/AuthSuccess.jsx";
 import api from "../api.js";
 
 // Mock API client
 vi.mock("../api.js", () => ({
   default: {
     get: vi.fn(),
+    post: vi.fn(),
     interceptors: {
       request: { use: vi.fn() },
       response: { use: vi.fn() }
@@ -138,6 +140,34 @@ describe("8. Authentication Context & Protected Route Component Tests", () => {
     await waitFor(() => {
       expect(screen.getByTestId("token-status")).toHaveTextContent("UNAUTHENTICATED");
     });
+  });
+
+  it("AuthSuccess exchanges one-time OAuth code via POST /auth/exchange and scrubs URL", async () => {
+    const exchangedToken = `header.${btoa(JSON.stringify({ userId: "u1", tier: "PRO" }))}.sig`;
+    api.post.mockResolvedValueOnce({ data: { token: exchangedToken } });
+    api.get.mockResolvedValueOnce({ data: { id: "u1", username: "code_user", tier: "PRO" } });
+
+    const originalLocation = window.location;
+    window.history.replaceState({}, "", "/auth/success?code=one_time_secret_code_123");
+
+    render(
+      <MemoryRouter initialEntries={["/auth/success?code=one_time_secret_code_123"]}>
+        <AuthProvider>
+          <Routes>
+            <Route path="/auth/success" element={<AuthSuccess />} />
+            <Route path="/dashboard" element={<div>Dashboard Page</div>} />
+          </Routes>
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(api.post).toHaveBeenCalledWith("/auth/exchange", { code: "one_time_secret_code_123" });
+      expect(screen.getByText("Dashboard Page")).toBeInTheDocument();
+    });
+    expect(localStorage.getItem("token")).toBe(exchangedToken);
+    expect(window.location.search).toBe("");
+    void originalLocation;
   });
 
   it("ProtectedRoute redirects unauthenticated visitors to landing page", () => {
