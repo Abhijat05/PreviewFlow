@@ -10,6 +10,7 @@
     "backup:db": "node scripts/backupDb.js",
     "restore:db": "node scripts/restoreDb.js",
     "rotate:keys": "node scripts/rotateKeys.js",
+    "benchmark": "node scripts/benchmark.js",
     "test": "node --test"
   },
   "keywords": [],
