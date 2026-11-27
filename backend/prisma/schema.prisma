@@ -181,3 +181,22 @@ model PortAllocation {
   @@index([tier, isAllocated])
   @@index([previewId])
 }
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  actorUserId  String?
+  actorType    String   @default("USER")
+  action       String
+  resourceType String?
+  resourceId   String?
+  status       String   @default("SUCCESS")
+  ipAddress    String?
+  requestId    String?
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  @@index([actorUserId, createdAt])
+  @@index([action, createdAt])
+  @@index([resourceType, resourceId])
+  @@index([createdAt])
+}
