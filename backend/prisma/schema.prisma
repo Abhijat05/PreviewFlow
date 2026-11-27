@@ -41,25 +41,27 @@ enum WebhookStatus {
 }
 
 model User {
-  id        String    @id @default(cuid())
-  githubId  String    @unique
-  name      String?
-  email     String?   @unique
-  avatarUrl String?
-  projects  Project[] @relation("UserProjects")
-  tier      UserTier  @default(FREE)
+  id          String    @id @default(cuid())
+  githubId    String    @unique
+  name        String?
+  email       String?   @unique
+  avatarUrl   String?
+  accessToken String?
+  projects    Project[] @relation("UserProjects")
+  tier        UserTier  @default(FREE)
 }
 
 model Project {
-  id            String    @id @default(cuid())
-  userId        String
-  user          User      @relation("UserProjects", fields: [userId], references: [id], onDelete: Cascade)
-  repoOwner     String
-  repoName      String
-  webhookSecret String
-  accessToken   String?
-  webhookId     String?
-  previews      Preview[]         @relation("ProjectPreviews")
+  id                String            @id @default(cuid())
+  userId            String
+  user              User              @relation("UserProjects", fields: [userId], references: [id], onDelete: Cascade)
+  repoOwner         String
+  repoName          String
+  webhookSecret     String
+  accessToken       String?
+  webhookId         String?
+  allowForkBuilds   Boolean           @default(false)
+  previews          Preview[]         @relation("ProjectPreviews")
   webhookDeliveries WebhookDelivery[] @relation("ProjectWebhookDeliveries")
 
   @@index([userId])
