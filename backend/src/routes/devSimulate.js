@@ -1,6 +1,7 @@
 import express from "express";
 import { prisma } from "../db.js";
 import { handlePROpenOrSync, handlePRClosed } from "../services/prHandlers.js";
+import { logger } from "../utils/logger.js";
 
 const router = express.Router();
 
@@ -58,7 +59,7 @@ router.post("/dev/sim-pr", async (req, res) => {
 
     return res.json({ ok: true });
   } catch (err) {
-    console.error("dev/sim-pr error:", err);
+    logger.error("Simulation PR error", { err });
     return res.status(500).json({ error: "simulation_failed", message: err.message });
   }
 });

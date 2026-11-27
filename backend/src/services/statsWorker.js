@@ -2,6 +2,7 @@
 import docker from "./dockerClient.js";
 import { prisma } from "../db.js";
 import { getIO } from "../socket.js";
+import { logger } from "../utils/logger.js";
 
 const POLL_INTERVAL = 3000; // Balanced 3-second interval prevents Docker socket thrashing
 const STORE_INTERVAL = 30000; // Persist metric sample every 30 seconds
@@ -27,7 +28,7 @@ export async function pruneExpiredPreviewMetrics({
 }
 
 export function startStatsWorker() {
-  console.log("------Stats worker started------");
+  logger.info("Stats worker started");
   let isTickRunning = false;
 
   const timer = setInterval(async () => {
@@ -167,7 +168,7 @@ export function startStatsWorker() {
 
               lastStoredAt[p.id] = sampleNow;
             } catch (e) {
-              console.error("metric store failed", e.message);
+              logger.error("Preview metric store failed", { previewId: p.id, err: e });
             }
           }
         } catch {
@@ -175,7 +176,7 @@ export function startStatsWorker() {
         }
       }
     } catch (err) {
-      console.error("stats worker error", err);
+      logger.error("Stats worker tick error", { err });
     } finally {
       isTickRunning = false;
     }

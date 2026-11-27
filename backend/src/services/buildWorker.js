@@ -1,6 +1,8 @@
 // backend/src/services/buildWorker.js
 import os from "os";
 import { prisma as defaultPrisma } from "../db.js";
+import { logger, runWithContext } from "../utils/logger.js";
+import { defaultAlertManager } from "./alertService.js";
 
 /**
  * Generates a unique worker ID containing hostname, PID, and timestamp.
@@ -184,6 +186,15 @@ export async function recoverStaleLeases({ client = defaultPrisma } = {}) {
     }
   }
 
+  if (recoveredCount + failedCount > 0) {
+    defaultAlertManager.recordLeaseRecoveries(recoveredCount + failedCount);
+    logger.warn("Recovered stale build leases", {
+      recoveredCount,
+      failedCount,
+      recoveredBuildIds
+    });
+  }
+
   return {
     recoveredCount,
     failedCount,
@@ -218,9 +229,7 @@ export function createWorkerLoop({
       if (staleReport.unmigrated) {
         if (!hasWarnedUnmigrated) {
           hasWarnedUnmigrated = true;
-          console.warn(
-            `[BuildWorker] Warning: Table "Build" does not exist in database. Build worker will pause until migrations are applied ('npx prisma db push').`
-          );
+          logger.warn("Build table unmigrated; build worker pausing until schema push");
         }
         return;
       }
@@ -244,7 +253,7 @@ export function createWorkerLoop({
               currentAbortController.abort();
             }
           } catch (err) {
-            console.error(`Worker ${workerId} failed to renew lease for build ${job.id}:`, err);
+            logger.error("Worker failed to renew lease", { workerId, buildId: job.id, err });
           }
         }, heartbeatIntervalMs);
 
@@ -254,14 +263,18 @@ export function createWorkerLoop({
         }
 
         try {
-          await executeJob(job, {
-            abortSignal: currentAbortController.signal,
-            renewLease: (sec) =>
-              renewLease(job.id, workerId, {
-                leaseDurationSeconds: sec || leaseDurationSeconds,
-                client
+          await runWithContext(
+            { workerId, buildId: job.id, previewId: job.previewId },
+            () =>
+              executeJob(job, {
+                abortSignal: currentAbortController.signal,
+                renewLease: (sec) =>
+                  renewLease(job.id, workerId, {
+                    leaseDurationSeconds: sec || leaseDurationSeconds,
+                    client
+                  })
               })
-          });
+          );
         } finally {
           if (currentHeartbeat) {
             clearInterval(currentHeartbeat);
@@ -271,7 +284,7 @@ export function createWorkerLoop({
         }
       }
     } catch (err) {
-      console.error(`Worker ${workerId} polling error:`, err);
+      logger.error("Worker polling error", { workerId, err });
     } finally {
       if (running) {
         pollTimer = setTimeout(poll, pollIntervalMs);

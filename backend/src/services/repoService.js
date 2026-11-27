@@ -3,6 +3,7 @@ import simpleGit from "simple-git";
 import fs from "fs";
 import path from "path";
 import os from "os";
+import { logger } from "../utils/logger.js";
 
 export const DEFAULT_GIT_CLONE_TIMEOUT_MS = Number(process.env.GIT_CLONE_TIMEOUT_MS) || 60_000;
 
@@ -243,7 +244,7 @@ export function cleanupOrphanedBuildDirs(maxAgeMs = 60 * 60 * 1000) {
     }
     return cleanedCount;
   } catch (err) {
-    console.error("Orphaned build dir cleanup error:", err.message);
+    logger.error("Orphaned build dir cleanup error", { err });
     return 0;
   }
 }

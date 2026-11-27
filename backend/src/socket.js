@@ -2,6 +2,9 @@
 import { Server } from "socket.io";
 import jwt from "jsonwebtoken";
 import { prisma } from "./db.js";
+import { logger } from "./utils/logger.js";
+import { recordAuditEvent } from "./services/auditService.js";
+import { incActiveSockets, decActiveSockets } from "./services/metricsService.js";
 
 let io;
 const AUTH_TIMEOUT_MS = Number(process.env.SOCKET_AUTH_TIMEOUT_MS) || 5000;
@@ -40,10 +43,12 @@ export function initSocket(server) {
 
   io.on("connection", (socket) => {
     let authenticated = false;
+    let metricsIncremented = false;
 
     // Disconnect idle unauthenticated sockets that fail to register within timeout
     const authTimer = setTimeout(() => {
       if (!authenticated) {
+        logger.warn("Socket authentication timeout", { socketId: socket.id });
         socket.emit("error", "Authentication timeout");
         socket.disconnect();
       }
@@ -70,11 +75,22 @@ export function initSocket(server) {
         const count = trackUserSocket(payload.userId, socket.id);
         if (count > MAX_SOCKETS_PER_USER) {
           untrackUserSocket(payload.userId, socket.id);
+          void recordAuditEvent({
+            actorUserId: payload.userId,
+            action: "SOCKET_LIMIT_EXCEEDED",
+            resourceType: "WebSocket",
+            status: "DENIED",
+            metadata: { activeCount: count }
+          });
           socket.emit("error", "Connection limit exceeded");
           return socket.disconnect();
         }
 
         authenticated = true;
+        if (!metricsIncremented) {
+          metricsIncremented = true;
+          incActiveSockets();
+        }
         clearTimeout(authTimer);
         socket.userId = payload.userId;
 
@@ -99,6 +115,13 @@ export function initSocket(server) {
           }
 
           if (preview.project.userId !== payload.userId) {
+            void recordAuditEvent({
+              actorUserId: payload.userId,
+              action: "SOCKET_ROOM_DENIED",
+              resourceType: "Preview",
+              resourceId: previewId,
+              status: "DENIED"
+            });
             socket.emit("error", "Not authorized for this preview");
             return socket.disconnect();
           }
@@ -111,7 +134,7 @@ export function initSocket(server) {
           socket.emit("registered", { userId: payload.userId });
         }
       } catch (err) {
-        console.warn("Socket register error:", err?.message || err);
+        logger.warn("Socket register error", { socketId: socket.id, err });
         socket.emit("error", "Authentication failed");
         socket.disconnect();
       }
@@ -120,6 +143,10 @@ export function initSocket(server) {
     socket.on("disconnect", () => {
       clearTimeout(authTimer);
       untrackUserSocket(socket.userId, socket.id);
+      if (metricsIncremented) {
+        metricsIncremented = false;
+        decActiveSockets();
+      }
     });
   });
 

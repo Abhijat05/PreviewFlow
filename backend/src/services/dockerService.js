@@ -7,6 +7,7 @@ import { getIO } from "../socket.js";
 import { resolveProjectConfig, assertNoUnsafeSymlinks } from "./detectProjectType.js";
 import { getPortPoolForTier } from "../middleware/subscription.js";
 import { normalizeTier } from "../middleware/tierLimits.js";
+import { logger } from "../utils/logger.js";
 import {
   isPortFree,
   portReservedInDB,
@@ -379,7 +380,7 @@ export function startPeriodicDockerCleanup({
 
       await pruneStalePreviewImages({ maxAgeHours, activeImageTags });
     } catch (err) {
-      console.warn("[DockerCleanup] Periodic cleanup warning:", err?.message || err);
+      logger.warn("Periodic Docker cleanup warning", { err });
     }
   };
 
@@ -789,12 +790,12 @@ export function removeContainerIfExists(containerName) {
         try {
           execFileSync(dockerBin, ["rm", "-f", id], { stdio: "ignore" });
         } catch (err) {
-          console.warn("Failed to remove container", id, err?.message || err);
+          logger.warn("Failed to remove container", { containerId: id, err });
         }
       }
     }
   } catch (err) {
-    console.warn("Error checking/removing container", err?.message || err);
+    logger.warn("Error checking/removing container", { containerName, err });
   }
 }
 
@@ -1047,7 +1048,7 @@ export async function buildPreview({
           }
         });
       } catch (e) {
-        console.error("Failed to mark preview error & free port:", e?.message || e);
+        logger.error("Failed to mark preview error & free port", { previewId, err: e });
       }
 
       try {

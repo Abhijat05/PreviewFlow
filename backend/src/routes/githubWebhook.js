@@ -11,6 +11,10 @@ import {
 import { decryptSecret } from "../services/cryptoService.js";
 import { enforceBuildQuota } from "../services/quotaService.js";
 import { isValidRepoCoordinates } from "../utils/validation.js";
+import { logger, extendContext } from "../utils/logger.js";
+import { recordHttpAudit } from "../services/auditService.js";
+import { recordWebhookMetric } from "../services/metricsService.js";
+import { defaultAlertManager } from "../services/alertService.js";
 
 const router = express.Router();
 
@@ -44,19 +48,37 @@ export async function handleGithubWebhook(req, res) {
       include: { user: true }
     });
 
-    if (!candidateProjects.length) return res.status(404).send("project not registered");
+    if (!candidateProjects.length) {
+      recordWebhookMetric({ event: event || "unknown", outcome: "unregistered_project" });
+      return res.status(404).send("project not registered");
+    }
 
     const project = candidateProjects.find((p) => {
       const secret = decryptSecret(p.webhookSecret);
       return verifyGithubSignature(raw, signature, secret);
     });
 
-    if (!project) return res.status(401).send("invalid signature");
+    if (!project) {
+      recordWebhookMetric({ event: event || "unknown", outcome: "invalid_signature" });
+      defaultAlertManager.recordInvalidSignature({ repoOwner, repoName, deliveryId });
+      await recordHttpAudit(req, {
+        actorType: "WEBHOOK",
+        action: "WEBHOOK_SIGNATURE_INVALID",
+        resourceType: "Webhook",
+        resourceId: `${repoOwner}/${repoName}`,
+        status: "DENIED",
+        metadata: { deliveryId, event }
+      });
+      return res.status(401).send("invalid signature");
+    }
+
+    extendContext({ projectId: project.id, userId: project.userId });
 
     // 2. Deduplication check AFTER authentic HMAC verification
     if (deliveryId) {
       const isDup = await isDuplicateDelivery(deliveryId);
       if (isDup) {
+        recordWebhookMetric({ event: event || "unknown", outcome: "duplicate" });
         return res.status(200).send("duplicate");
       }
 
@@ -74,6 +96,7 @@ export async function handleGithubWebhook(req, res) {
       if (deliveryId) {
         await markDeliveryProcessed(deliveryId, { status: "IGNORED" });
       }
+      recordWebhookMetric({ event: event || "unknown", outcome: "ignored" });
       return res.status(200).send("ignored");
     }
 
@@ -86,6 +109,7 @@ export async function handleGithubWebhook(req, res) {
       if (deliveryId) {
         await markDeliveryProcessed(deliveryId, { status: "FAILED", errorMessage: "missing pr number" });
       }
+      recordWebhookMetric({ event, outcome: "missing_pr_number" });
       return res.status(400).send("missing pr number");
     }
 
@@ -96,6 +120,7 @@ export async function handleGithubWebhook(req, res) {
         if (deliveryId) {
           await markDeliveryProcessed(deliveryId, { status: "IGNORED", errorMessage: "free_tier_blocked" });
         }
+        recordWebhookMetric({ event, outcome: "free_tier_blocked" });
         return res.status(200).send("free_tier_blocked");
       }
 
@@ -103,6 +128,7 @@ export async function handleGithubWebhook(req, res) {
         if (deliveryId) {
           await markDeliveryProcessed(deliveryId, { status: "IGNORED", errorMessage: "hobby_sync_ignored" });
         }
+        recordWebhookMetric({ event, outcome: "hobby_sync_ignored" });
         return res.status(200).send("hobby_sync_ignored");
       }
 
@@ -117,6 +143,16 @@ export async function handleGithubWebhook(req, res) {
         if (deliveryId) {
           await markDeliveryProcessed(deliveryId, { status: "IGNORED", errorMessage: "fork_pr_blocked" });
         }
+        recordWebhookMetric({ event, outcome: "fork_pr_blocked" });
+        await recordHttpAudit(req, {
+          actorUserId: project.userId,
+          actorType: "WEBHOOK",
+          action: "FORK_PR_BLOCKED",
+          resourceType: "Project",
+          resourceId: project.id,
+          status: "DENIED",
+          metadata: { prNumber, headFullName, baseFullName }
+        });
         return res.status(200).send("fork_pr_blocked");
       }
 
@@ -141,6 +177,16 @@ export async function handleGithubWebhook(req, res) {
         if (deliveryId) {
           await markDeliveryProcessed(deliveryId, { status: "IGNORED", errorMessage: quota.code });
         }
+        recordWebhookMetric({ event, outcome: "quota_exceeded" });
+        await recordHttpAudit(req, {
+          actorUserId: project.userId,
+          actorType: "WEBHOOK",
+          action: "WEBHOOK_QUOTA_EXCEEDED",
+          resourceType: "Project",
+          resourceId: project.id,
+          status: "DENIED",
+          metadata: { prNumber, code: quota.code }
+        });
         return res.status(200).send("quota_exceeded");
       }
 
@@ -164,21 +210,25 @@ export async function handleGithubWebhook(req, res) {
       if (deliveryId) {
         await markDeliveryProcessed(deliveryId, { status: "PROCESSED" });
       }
+      recordWebhookMetric({ event, outcome: "processed" });
     } else if (action === "closed" || action === "deleted") {
       await closedHandler({ project, prNumber });
 
       if (deliveryId) {
         await markDeliveryProcessed(deliveryId, { status: "PROCESSED" });
       }
+      recordWebhookMetric({ event, outcome: "processed" });
     } else {
       if (deliveryId) {
         await markDeliveryProcessed(deliveryId, { status: "IGNORED" });
       }
+      recordWebhookMetric({ event, outcome: "ignored" });
     }
 
     return res.status(200).send("ok");
   } catch (err) {
-    console.error("github webhook error:", err);
+    logger.error("GitHub webhook handler failed", { deliveryId, event, err });
+    recordWebhookMetric({ event: event || "unknown", outcome: "error" });
     if (deliveryId) {
       await markDeliveryProcessed(deliveryId, { status: "FAILED", errorMessage: err.message }).catch(() => {});
     }

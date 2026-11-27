@@ -6,6 +6,8 @@ import { getTierLimits } from "../middleware/tierLimits.js";
 import { prisma } from "../db.js";
 import { decryptSecret, encryptSecret } from "../services/cryptoService.js";
 import { isValidRepoCoordinates } from "../utils/validation.js";
+import { logger } from "../utils/logger.js";
+import { recordHttpAudit } from "../services/auditService.js";
 
 const router = express.Router();
 
@@ -90,9 +92,30 @@ export async function handleCreateWebhook(req, res) {
       });
     }
 
+    await recordHttpAudit(req, {
+      actorUserId: user?.id || null,
+      action: "WEBHOOK_CREATED",
+      resourceType: "Project",
+      resourceId: projectId,
+      status: "SUCCESS",
+      metadata: { webhookId }
+    });
+
     return res.json({ ok: true, webhookId });
   } catch (err) {
-    console.error("create-webhook error:", err?.response?.data || err?.message || err);
+    logger.error("Webhook creation failed", {
+      projectId: req.body?.projectId || null,
+      status: err?.response?.status || null,
+      err
+    });
+    await recordHttpAudit(req, {
+      actorUserId: req.auth?.user?.id || null,
+      action: "WEBHOOK_CREATE_FAILED",
+      resourceType: "Project",
+      resourceId: req.body?.projectId || null,
+      status: "FAILURE",
+      metadata: { reason: err?.response?.data?.message || err?.message || "unknown" }
+    });
     return res.status(500).json({ error: "webhook_creation_failed" });
   }
 }

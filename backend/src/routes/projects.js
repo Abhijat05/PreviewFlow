@@ -3,6 +3,7 @@ import express from "express";
 import { prisma } from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { serializeProjectSafe } from "../services/cryptoService.js";
+import { logger } from "../utils/logger.js";
 
 const router = express.Router();
 
@@ -16,7 +17,7 @@ router.get("/", requireAuth, async (req, res) => {
 
     res.json((projects || []).map(serializeProjectSafe));
   } catch (err) {
-    console.error(err);
+    logger.error("Failed to load projects", { err });
     res.status(500).json({ error: "Failed to load projects" });
   }
 });

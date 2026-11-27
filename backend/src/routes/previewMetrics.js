@@ -1,6 +1,7 @@
 import express from "express";
 import { prisma } from "../db.js";
 import { requireSubscription } from "../middleware/subscription.js";
+import { logger } from "../utils/logger.js";
 
 const router = express.Router();
 
@@ -65,7 +66,7 @@ router.get(
       });
 
     } catch (err) {
-      console.error("metrics fetch error", err);
+      logger.error("Preview metrics fetch failed", { err });
       res.status(500).json({ error: "Failed to fetch metrics" });
     }
   }

@@ -6,6 +6,8 @@ import { prisma } from "../db.js";
 import { requireSubscription, assertRepoQuota } from "../middleware/subscription.js";
 import { encryptSecret, serializeProjectSafe } from "../services/cryptoService.js";
 import { isValidRepoCoordinates } from "../utils/validation.js";
+import { logger } from "../utils/logger.js";
+import { recordHttpAudit } from "../services/auditService.js";
 
 const router = express.Router();
 
@@ -89,6 +91,14 @@ export async function handleConnectRepo(req, res) {
         accessToken
       });
       if (!hasAccess) {
+        await recordHttpAudit(req, {
+          actorUserId: user.id,
+          action: "PROJECT_CONNECT_DENIED",
+          resourceType: "Project",
+          resourceId: `${cleanOwner}/${cleanRepo}`,
+          status: "DENIED",
+          metadata: { reason: "insufficient_repo_permissions" }
+        });
         return res.status(403).json({
           error: "insufficient_repo_permissions",
           message: "You must have push or admin access to connect this repository."
@@ -145,9 +155,25 @@ export async function handleConnectRepo(req, res) {
           webhookCreated = true;
         }
       } catch (hookErr) {
-        console.warn("Auto webhook creation warning (non-fatal):", hookErr?.response?.data || hookErr.message);
+        logger.warn("Auto webhook creation failed", {
+          projectId: project.id,
+          err: hookErr?.response?.data || hookErr
+        });
       }
     }
+
+    await recordHttpAudit(req, {
+      actorUserId: user.id,
+      action: "PROJECT_CONNECTED",
+      resourceType: "Project",
+      resourceId: project.id,
+      status: "SUCCESS",
+      metadata: {
+        repoOwner: cleanOwner,
+        repoName: cleanRepo,
+        webhookCreated
+      }
+    });
 
     return res.json({
       success: true,
@@ -155,7 +181,7 @@ export async function handleConnectRepo(req, res) {
       webhookCreated
     });
   } catch (err) {
-    console.error("connect-repo error:", err);
+    logger.error("Failed to connect repository", { err });
     return res.status(500).json({ success: false, error: "connection_failed" });
   }
 }

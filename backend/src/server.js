@@ -8,10 +8,10 @@ import cors from "cors";
 import passport from "./auth.js";
 import jwt from "jsonwebtoken";
 import bodyParser from "body-parser";
-import morgan from "morgan";
 import { prisma } from "./db.js";
 import { initSocket } from "./socket.js";
 import { securityHeaders } from "./middleware/securityHeaders.js";
+import { requestContextMiddleware } from "./middleware/requestContext.js";
 import {
   authRateLimiter,
   webhookRateLimiter,
@@ -19,6 +19,9 @@ import {
   apiRateLimiter
 } from "./middleware/rateLimiter.js";
 import { validateProductionConfig } from "./utils/configValidation.js";
+import { logger, extendContext } from "./utils/logger.js";
+import { recordHttpAudit } from "./services/auditService.js";
+import { defaultAlertManager } from "./services/alertService.js";
 
 import githubRepos from "./routes/githubRepos.js";
 import connectRepo from "./routes/connectRepo.js";
@@ -29,6 +32,8 @@ import projectDashboard from "./routes/projectDashboard.js";
 import logsRoute from "./routes/logs.js";
 import userRoute from "./routes/user.js";
 import accountTier from "./routes/accountTier.js";
+import metricsRoutes from "./routes/metrics.js";
+import auditLogsRoutes from "./routes/auditLogs.js";
 import { startStatsWorker } from "./services/statsWorker.js";
 import previewMetricsRoutes from "./routes/previewMetrics.js";
 import devSim from "./routes/devSimulate.js"; // Development simulation routes
@@ -42,6 +47,8 @@ const app = express();
 app.disable("x-powered-by");
 app.use(securityHeaders);
 const server = http.createServer(app);
+
+app.use(requestContextMiddleware);
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 const allowedOrigins = Array.from(new Set([FRONTEND_URL, "http://localhost:5173"]));
@@ -58,8 +65,6 @@ app.use(
     credentials: true,
   })
 );
-
-app.use(morgan("dev"));
 
 // Raw-body JSON parser for GitHub webhook HMAC verification with explicit payload size limit
 app.use(
@@ -102,15 +107,18 @@ app.get("/health", (req, res) => {
   });
 });
 
-// Readiness check verifying PostgreSQL connectivity and worker state
+// Readiness check verifying PostgreSQL connectivity, worker state, and alert health
 app.get("/health/ready", async (req, res) => {
   try {
     await prisma.$queryRaw`SELECT 1`;
+    const alertState = defaultAlertManager.getAlertState();
     return res.json({
       status: "ready",
       db: "connected",
       mode: PREVIEWFLOW_MODE,
       workerRunning: Boolean(buildWorkerInstance?.isRunning?.()),
+      alerts: alertState.status,
+      activeAlertsCount: alertState.activeAlerts.length,
       timestamp: new Date().toISOString()
     });
   } catch (err) {
@@ -121,6 +129,9 @@ app.get("/health/ready", async (req, res) => {
     });
   }
 });
+
+// Prometheus telemetry metrics endpoint (mounted outside API rate limiter)
+app.use("/", metricsRoutes);
 
 app.get("/auth/github", authRateLimiter, passport.authenticate("github"));
 
@@ -140,6 +151,8 @@ app.get(
         return res.status(401).send("user_not_found");
       }
 
+      extendContext({ userId: freshUser.id });
+
       // Never embed GitHub OAuth accessToken inside client-held JWT
       const token = jwt.sign(
         {
@@ -150,17 +163,26 @@ app.get(
         { expiresIn: "7d" }
       );
 
+      await recordHttpAudit(req, {
+        actorUserId: freshUser.id,
+        action: "AUTH_LOGIN",
+        resourceType: "User",
+        resourceId: freshUser.id,
+        status: "SUCCESS",
+        metadata: { tier: freshUser.tier }
+      });
+
       // Redirect with single-use short-lived code instead of raw JWT in URL
       const code = issueAuthExchangeCode(token);
       return res.redirect(`${FRONTEND_URL}/auth/success?code=${code}`);
     } catch (err) {
-      console.error("OAuth callback error:", err);
+      logger.error("OAuth callback error", { err });
       return res.status(500).send("auth_failed");
     }
   }
 );
 
-app.post("/auth/exchange", authRateLimiter, (req, res) => {
+app.post("/auth/exchange", authRateLimiter, async (req, res) => {
   const { code } = req.body || {};
   if (!code || typeof code !== "string") {
     return res.status(400).json({ error: "missing_code" });
@@ -170,8 +192,23 @@ app.post("/auth/exchange", authRateLimiter, (req, res) => {
   pendingAuthCodes.delete(code);
 
   if (!entry || entry.expiresAt < Date.now()) {
+    await recordHttpAudit(req, {
+      action: "AUTH_EXCHANGE",
+      resourceType: "AuthSession",
+      status: "DENIED",
+      metadata: { reason: "invalid_or_expired_code" }
+    });
     return res.status(401).json({ error: "invalid_or_expired_code" });
   }
+
+  const decoded = jwt.decode(entry.token);
+  await recordHttpAudit(req, {
+    actorUserId: decoded?.userId || null,
+    action: "AUTH_EXCHANGE",
+    resourceType: "User",
+    resourceId: decoded?.userId || null,
+    status: "SUCCESS"
+  });
 
   return res.json({ token: entry.token });
 });
@@ -184,6 +221,7 @@ app.use("/api", createWebhook);
 app.use("/api", previewActions);
 app.use("/api", projectDashboard);
 app.use("/api", logsRoute);
+app.use("/api", auditLogsRoutes);
 app.use("/api/user", userRoute);
 app.use("/api/previews", previewMetricsRoutes);
 app.use("/api/account", accountTier);
@@ -201,7 +239,7 @@ app.use((err, req, res, _next) => {
   if (err?.type === "entity.parse.failed" || err instanceof SyntaxError) {
     return res.status(400).json({ error: "invalid_json" });
   }
-  console.error("Unhandled Express error:", err?.message || err);
+  logger.error("Unhandled Express error", { err, statusCode: err?.status || 500 });
   return res.status(err?.status || 500).json({ error: "internal_error" });
 });
 
@@ -268,7 +306,7 @@ if (!isTest) {
 
     const PORT = process.env.PORT || 4000;
     server.listen(PORT, () => {
-      console.log(`Backend [mode: ${PREVIEWFLOW_MODE}] running on http://localhost:${PORT}`);
+      logger.info("Backend server listening", { mode: PREVIEWFLOW_MODE, port: Number(PORT) });
     });
   }
 
@@ -285,25 +323,28 @@ if (!isTest) {
     runStartupReconciliation()
       .then((recReport) => {
         if (recReport?.unmigrated) {
-          console.warn("[Reconciler] PortAllocation/Build migrations pending; skipped DB reconciliation.");
+          logger.warn("Startup reconciliation skipped: migrations pending");
         } else if (!recReport?.skipped) {
-          console.log(
-            `[Reconciler] Startup complete: preserved=${recReport.preservedContainers}, pruned=${recReport.prunedContainers}, releasedPorts=${recReport.releasedPorts}, recoveredBuilds=${recReport.staleBuildsRecovered}`
-          );
+          logger.info("Startup reconciliation complete", {
+            preservedContainers: recReport.preservedContainers,
+            prunedContainers: recReport.prunedContainers,
+            releasedPorts: recReport.releasedPorts,
+            staleBuildsRecovered: recReport.staleBuildsRecovered
+          });
         }
       })
       .catch((err) => {
-        console.warn("[Reconciler] Startup reconciliation warning:", err?.message || err);
+        logger.warn("Startup reconciliation warning", { err });
       })
       .finally(() => {
         buildWorkerInstance.start();
-        console.log(`[Worker] Build worker loop started (id: ${buildWorkerInstance.getWorkerId()})`);
+        logger.info("Build worker loop started", { workerId: buildWorkerInstance.getWorkerId() });
       });
   }
 
   for (const sig of ["SIGTERM", "SIGINT"]) {
     process.on(sig, () => {
-      console.log(`[Server] Received ${sig}, shutting down gracefully...`);
+      logger.info("Shutdown signal received", { signal: sig });
       shutdownServer()
         .then(() => process.exit(0))
         .catch(() => process.exit(1));

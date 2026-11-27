@@ -2,6 +2,7 @@
 import jwt from "jsonwebtoken";
 import { prisma } from "../db.js";
 import { decryptSecret } from "../services/cryptoService.js";
+import { extendContext } from "../utils/logger.js";
 
 export async function decodeAuth(req) {
   const header = req.headers?.authorization || "";
@@ -32,6 +33,7 @@ export function requireAuth(req, res, next) {
       req.auth = authContext;
       req.user = authContext;
       req.sub = authContext;
+      extendContext({ userId: authContext.userId });
       next();
     })
     .catch((err) => {

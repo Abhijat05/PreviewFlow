@@ -7,6 +7,10 @@ import { buildPreview, removeContainer, removeImage, releasePortInMemory } from 
 import { releasePort, releasePreviewPorts } from "./portService.js";
 import { enqueueBuild, TERMINAL_BUILD_STATUSES } from "./buildQueueService.js";
 import { decryptSecret } from "./cryptoService.js";
+import { logger, runWithContext } from "../utils/logger.js";
+import { recordAuditEvent } from "./auditService.js";
+import { recordBuildMetric } from "./metricsService.js";
+import { defaultAlertManager } from "./alertService.js";
 
 /**
  * In-process registry of running build AbortControllers keyed by buildId.
@@ -213,6 +217,8 @@ export async function triggerBuild({
     client
   });
 
+  recordBuildMetric({ status: "QUEUED", source });
+
   emitPreviewStatus(preview.id, project.userId, {
     previewId: preview.id,
     projectId: project.id,
@@ -321,6 +327,7 @@ export async function executeBuildJob(
   }
 
   const { controller, cleanup } = createLinkedController(job.id, externalSignal);
+  const jobStartNs = process.hrtime.bigint();
   let repoPath = null;
   let builtContainerName = null;
   let builtImageName = null;
@@ -329,244 +336,306 @@ export async function executeBuildJob(
   let committedSwitch = false;
   let previewContext = null;
 
-  try {
-    // Load preview + project + owner info
-    previewContext = await client.preview.findUnique({
-      where: { id: job.previewId },
-      include: { project: { include: { user: true } } }
-    });
-
-    if (!previewContext || !previewContext.project) {
-      throw new Error(`Preview or Project not found for build ${job.id}`);
-    }
-
-    const project = previewContext.project;
-    const previousContainerName = previewContext.containerName || null;
-    previousPort = previewContext.port || null;
-    const previousActiveBuild = previewContext.activeBuildId
-      ? await client.build.findUnique({ where: { id: previewContext.activeBuildId } }).catch(() => null)
-      : null;
-    const previousImageTag = previousActiveBuild?.imageTag || null;
-
-    // Gate 1: Verify build is still active before cloning
-    await assertJobCanContinue(job.id, previewContext.id, controller.signal, client);
-
-    emitPreviewStatus(previewContext.id, project.userId, {
-      previewId: previewContext.id,
-      projectId: project.id,
-      prNumber: previewContext.prNumber,
+  return runWithContext(
+    {
       buildId: job.id,
-      buildNumber: job.buildNumber,
-      commitSha: job.commitSha,
-      status: "building"
-    });
+      previewId: job.previewId,
+      workerId: job.workerId || undefined
+    },
+    async () => {
+      try {
+        // Load preview + project + owner info
+        previewContext = await client.preview.findUnique({
+          where: { id: job.previewId },
+          include: { project: { include: { user: true } } }
+        });
 
-    // Stage 1: Clone repository pinned to exact commitSha
-    repoPath = await cloner({
-      repoOwner: project.repoOwner,
-      repoName: project.repoName,
-      ref: job.branch,
-      commitSha: job.commitSha,
-      prNumber: previewContext.prNumber,
-      accessToken: decryptSecret(project.accessToken),
-      abortSignal: controller.signal
-    });
+        if (!previewContext || !previewContext.project) {
+          throw new Error(`Preview or Project not found for build ${job.id}`);
+        }
 
-    // Gate 2: Verify build wasn't superseded or cancelled during git clone
-    await assertJobCanContinue(job.id, previewContext.id, controller.signal, client);
+        const project = previewContext.project;
+        const previousContainerName = previewContext.containerName || null;
+        previousPort = previewContext.port || null;
+        const previousActiveBuild = previewContext.activeBuildId
+          ? await client.build.findUnique({ where: { id: previewContext.activeBuildId } }).catch(() => null)
+          : null;
+        const previousImageTag = previousActiveBuild?.imageTag || null;
 
-    // Stage 2: Build image, enforce resource limits, run container, and execute readiness probe
-    const rawResult = await builder({
-      project,
-      previewId: previewContext.id,
-      repoPath,
-      prNumber: previewContext.prNumber,
-      buildNumber: job.buildNumber,
-      buildId: job.id,
-      commitSha: job.commitSha,
-      abortSignal: controller.signal,
-      managedByOrchestrator: true
-    });
+        // Gate 1: Verify build is still active before cloning
+        await assertJobCanContinue(job.id, previewContext.id, controller.signal, client);
 
-    const buildResult =
-      typeof rawResult === "string"
-        ? { url: rawResult, containerName: null, port: null, imageName: null, logs: "" }
-        : rawResult || {};
+        emitPreviewStatus(previewContext.id, project.userId, {
+          previewId: previewContext.id,
+          projectId: project.id,
+          prNumber: previewContext.prNumber,
+          buildId: job.id,
+          buildNumber: job.buildNumber,
+          commitSha: job.commitSha,
+          status: "building"
+        });
 
-    builtContainerName = buildResult.containerName || null;
-    builtImageName = buildResult.imageName || null;
-    allocatedPort = buildResult.port || null;
+        // Stage 1: Clone repository pinned to exact commitSha
+        repoPath = await cloner({
+          repoOwner: project.repoOwner,
+          repoName: project.repoName,
+          ref: job.branch,
+          commitSha: job.commitSha,
+          prNumber: previewContext.prNumber,
+          accessToken: decryptSecret(project.accessToken),
+          abortSignal: controller.signal
+        });
 
-    // Gate 3 (Late Completion Guard): Verify build still owns latestBuildId before switching deployment
-    await assertJobCanContinue(job.id, previewContext.id, controller.signal, client);
+        // Gate 2: Verify build wasn't superseded or cancelled during git clone
+        await assertJobCanContinue(job.id, previewContext.id, controller.signal, client);
 
-    const completedAt = new Date();
+        // Stage 2: Build image, enforce resource limits, run container, and execute readiness probe
+        const rawResult = await builder({
+          project,
+          previewId: previewContext.id,
+          repoPath,
+          prNumber: previewContext.prNumber,
+          buildNumber: job.buildNumber,
+          buildId: job.id,
+          commitSha: job.commitSha,
+          abortSignal: controller.signal,
+          managedByOrchestrator: true
+        });
 
-    // Stage 3: Atomic Deployment Switch in database
-    await client.build.update({
-      where: { id: job.id },
-      data: {
-        status: "COMPLETED",
-        completedAt,
-        containerName: builtContainerName,
-        port: allocatedPort,
-        imageTag: builtImageName,
-        buildLogs: buildResult.logs || null
-      }
-    });
+        const buildResult =
+          typeof rawResult === "string"
+            ? { url: rawResult, containerName: null, port: null, imageName: null, logs: "" }
+            : rawResult || {};
 
-    const updatedPreviewData = {
-      status: "live",
-      url: buildResult.url,
-      activeBuildId: job.id,
-      deployedCommitSha: job.commitSha,
-      buildCompletedAt: completedAt
-    };
+        builtContainerName = buildResult.containerName || null;
+        builtImageName = buildResult.imageName || null;
+        allocatedPort = buildResult.port || null;
 
-    if (builtContainerName) {
-      updatedPreviewData.containerName = builtContainerName;
-    }
-    if (allocatedPort !== null && allocatedPort !== undefined) {
-      updatedPreviewData.port = allocatedPort;
-    }
-    if (buildResult.logs !== undefined) {
-      updatedPreviewData.buildLogs = buildResult.logs;
-    }
+        // Gate 3 (Late Completion Guard): Verify build still owns latestBuildId before switching deployment
+        await assertJobCanContinue(job.id, previewContext.id, controller.signal, client);
 
-    await client.preview.update({
-      where: { id: previewContext.id },
-      data: updatedPreviewData
-    });
+        const completedAt = new Date();
 
-    committedSwitch = true;
-
-    if (allocatedPort) {
-      releasePortInMemory(allocatedPort);
-    }
-
-    // Decommission old container & superseded image/port if replaced
-    if (previousContainerName && builtContainerName && previousContainerName !== builtContainerName) {
-      await containerRemover(previousContainerName).catch((err) => {
-        console.warn(`Failed to remove superseded container ${previousContainerName}:`, err?.message || err);
-      });
-    }
-    if (previousPort && allocatedPort && previousPort !== allocatedPort) {
-      await portReleaser({ port: previousPort, previewId: previewContext.id, client }).catch(() => {});
-    }
-    if (previousImageTag && builtImageName && previousImageTag !== builtImageName) {
-      await imageRemover(previousImageTag).catch(() => {});
-    }
-
-    emitPreviewStatus(previewContext.id, project.userId, {
-      previewId: previewContext.id,
-      projectId: project.id,
-      prNumber: previewContext.prNumber,
-      buildId: job.id,
-      buildNumber: job.buildNumber,
-      commitSha: job.commitSha,
-      status: "live",
-      url: buildResult.url,
-      containerName: builtContainerName
-    });
-
-    return {
-      status: "COMPLETED",
-      url: buildResult.url,
-      buildId: job.id,
-      containerName: builtContainerName,
-      port: allocatedPort
-    };
-  } catch (err) {
-    // Cleanup newly spun-up container & uncommitted image if switch was aborted or failed before activation
-    if (builtContainerName && !committedSwitch) {
-      await containerRemover(builtContainerName).catch(() => {});
-    }
-    if (builtImageName && !committedSwitch) {
-      await imageRemover(builtImageName, { force: true }).catch(() => {});
-    }
-    if (allocatedPort && !committedSwitch) {
-      releasePortInMemory(allocatedPort);
-      if (allocatedPort !== previousPort) {
-        await portReleaser({ port: allocatedPort, previewId: previewContext?.id, buildId: job.id, client }).catch(() => {});
-      }
-    }
-
-    const isAborted = err?.isAborted || err?.name === "AbortError" || controller.signal.aborted;
-
-    if (isAborted) {
-      const targetStatus = err?.reasonStatus === "SUPERSEDED" ? "SUPERSEDED" : "CANCELLED";
-      const currentBuild = await client.build.findUnique({ where: { id: job.id } }).catch(() => null);
-
-      if (currentBuild && !TERMINAL_BUILD_STATUSES.has(currentBuild.status)) {
+        // Stage 3: Atomic Deployment Switch in database
         await client.build.update({
           where: { id: job.id },
           data: {
-            status: targetStatus,
-            cancelledAt: new Date(),
-            errorMessage: err.message
+            status: "COMPLETED",
+            completedAt,
+            containerName: builtContainerName,
+            port: allocatedPort,
+            imageTag: builtImageName,
+            buildLogs: buildResult.logs || null
+          }
+        });
+
+        const updatedPreviewData = {
+          status: "live",
+          url: buildResult.url,
+          activeBuildId: job.id,
+          deployedCommitSha: job.commitSha,
+          buildCompletedAt: completedAt
+        };
+
+        if (builtContainerName) {
+          updatedPreviewData.containerName = builtContainerName;
+        }
+        if (allocatedPort !== null && allocatedPort !== undefined) {
+          updatedPreviewData.port = allocatedPort;
+        }
+        if (buildResult.logs !== undefined) {
+          updatedPreviewData.buildLogs = buildResult.logs;
+        }
+
+        await client.preview.update({
+          where: { id: previewContext.id },
+          data: updatedPreviewData
+        });
+
+        committedSwitch = true;
+
+        if (allocatedPort) {
+          releasePortInMemory(allocatedPort);
+        }
+
+        // Decommission old container & superseded image/port if replaced
+        if (previousContainerName && builtContainerName && previousContainerName !== builtContainerName) {
+          await containerRemover(previousContainerName).catch((err) => {
+            logger.warn("Failed to remove superseded container", {
+              containerName: previousContainerName,
+              err
+            });
+          });
+        }
+        if (previousPort && allocatedPort && previousPort !== allocatedPort) {
+          await portReleaser({ port: previousPort, previewId: previewContext.id, client }).catch(() => {});
+        }
+        if (previousImageTag && builtImageName && previousImageTag !== builtImageName) {
+          await imageRemover(previousImageTag).catch(() => {});
+        }
+
+        const durationSeconds = Number(process.hrtime.bigint() - jobStartNs) / 1e9;
+        recordBuildMetric({
+          status: "COMPLETED",
+          source: job.source || "WEBHOOK_SYNC",
+          tier: project.user?.tier || "FREE",
+          durationSeconds
+        });
+        defaultAlertManager.recordBuildOutcome("COMPLETED");
+        logger.info("Build job completed", {
+          durationSeconds: Math.round(durationSeconds * 1000) / 1000,
+          containerName: builtContainerName,
+          port: allocatedPort
+        });
+
+        emitPreviewStatus(previewContext.id, project.userId, {
+          previewId: previewContext.id,
+          projectId: project.id,
+          prNumber: previewContext.prNumber,
+          buildId: job.id,
+          buildNumber: job.buildNumber,
+          commitSha: job.commitSha,
+          status: "live",
+          url: buildResult.url,
+          containerName: builtContainerName
+        });
+
+        return {
+          status: "COMPLETED",
+          url: buildResult.url,
+          buildId: job.id,
+          containerName: builtContainerName,
+          port: allocatedPort
+        };
+      } catch (err) {
+        // Cleanup newly spun-up container & uncommitted image if switch was aborted or failed before activation
+        if (builtContainerName && !committedSwitch) {
+          await containerRemover(builtContainerName).catch(() => {});
+        }
+        if (builtImageName && !committedSwitch) {
+          await imageRemover(builtImageName, { force: true }).catch(() => {});
+        }
+        if (allocatedPort && !committedSwitch) {
+          releasePortInMemory(allocatedPort);
+          if (allocatedPort !== previousPort) {
+            await portReleaser({ port: allocatedPort, previewId: previewContext?.id, buildId: job.id, client }).catch(() => {});
+          }
+        }
+
+        const durationSeconds = Number(process.hrtime.bigint() - jobStartNs) / 1e9;
+        const isAborted = err?.isAborted || err?.name === "AbortError" || controller.signal.aborted;
+
+        if (isAborted) {
+          const targetStatus = err?.reasonStatus === "SUPERSEDED" ? "SUPERSEDED" : "CANCELLED";
+          const currentBuild = await client.build.findUnique({ where: { id: job.id } }).catch(() => null);
+
+          if (currentBuild && !TERMINAL_BUILD_STATUSES.has(currentBuild.status)) {
+            await client.build.update({
+              where: { id: job.id },
+              data: {
+                status: targetStatus,
+                cancelledAt: new Date(),
+                errorMessage: err.message
+              }
+            }).catch(() => {});
+          }
+
+          const finalStatus =
+            currentBuild?.status && TERMINAL_BUILD_STATUSES.has(currentBuild.status)
+              ? currentBuild.status
+              : targetStatus;
+
+          recordBuildMetric({
+            status: finalStatus,
+            source: job.source || "WEBHOOK_SYNC",
+            tier: previewContext?.project?.user?.tier || "FREE",
+            durationSeconds
+          });
+          logger.info("Build job aborted", { status: finalStatus });
+
+          return {
+            status: finalStatus,
+            aborted: true
+          };
+        }
+
+        // Non-abort failure: record FAILED on Build and update Preview only if still latest
+        await client.build.update({
+          where: { id: job.id },
+          data: {
+            status: "FAILED",
+            failedAt: new Date(),
+            errorMessage: err?.message || String(err),
+            buildLogs: err?.buildLogs || null
           }
         }).catch(() => {});
-      }
 
-      return {
-        status: currentBuild?.status && TERMINAL_BUILD_STATUSES.has(currentBuild.status)
-          ? currentBuild.status
-          : targetStatus,
-        aborted: true
-      };
-    }
+        recordBuildMetric({
+          status: "FAILED",
+          source: job.source || "WEBHOOK_SYNC",
+          tier: previewContext?.project?.user?.tier || "FREE",
+          durationSeconds
+        });
+        defaultAlertManager.recordBuildOutcome("FAILED");
+        logger.error("Build job failed", {
+          err,
+          durationSeconds: Math.round(durationSeconds * 1000) / 1000
+        });
+        void recordAuditEvent(
+          {
+            actorUserId: previewContext?.project?.userId || null,
+            actorType: "WORKER",
+            action: "BUILD_FAILED",
+            resourceType: "Build",
+            resourceId: job.id,
+            status: "FAILURE",
+            metadata: { previewId: job.previewId, message: err?.message }
+          },
+          { client }
+        );
 
-    // Non-abort failure: record FAILED on Build and update Preview only if still latest
-    await client.build.update({
-      where: { id: job.id },
-      data: {
-        status: "FAILED",
-        failedAt: new Date(),
-        errorMessage: err?.message || String(err),
-        buildLogs: err?.buildLogs || null
-      }
-    }).catch(() => {});
+        const latestPreview = previewContext
+          ? await client.preview.findUnique({ where: { id: previewContext.id } }).catch(() => null)
+          : null;
 
-    const latestPreview = previewContext
-      ? await client.preview.findUnique({ where: { id: previewContext.id } }).catch(() => null)
-      : null;
+        if (
+          latestPreview &&
+          latestPreview.status !== "deleted" &&
+          (!latestPreview.latestBuildId || latestPreview.latestBuildId === job.id)
+        ) {
+          await client.preview.update({
+            where: { id: latestPreview.id },
+            data: {
+              status: "error",
+              buildCompletedAt: new Date(),
+              ...(err?.buildLogs ? { buildLogs: err.buildLogs } : {})
+            }
+          }).catch(() => {});
 
-    if (
-      latestPreview &&
-      latestPreview.status !== "deleted" &&
-      (!latestPreview.latestBuildId || latestPreview.latestBuildId === job.id)
-    ) {
-      await client.preview.update({
-        where: { id: latestPreview.id },
-        data: {
-          status: "error",
-          buildCompletedAt: new Date(),
-          ...(err?.buildLogs ? { buildLogs: err.buildLogs } : {})
+          emitPreviewStatus(latestPreview.id, previewContext?.project?.userId, {
+            previewId: latestPreview.id,
+            projectId: previewContext?.project?.id,
+            prNumber: latestPreview.prNumber,
+            buildId: job.id,
+            buildNumber: job.buildNumber,
+            status: "error",
+            error: err?.message || "Build failed"
+          });
         }
-      }).catch(() => {});
 
-      emitPreviewStatus(latestPreview.id, previewContext?.project?.userId, {
-        previewId: latestPreview.id,
-        projectId: previewContext?.project?.id,
-        prNumber: latestPreview.prNumber,
-        buildId: job.id,
-        buildNumber: job.buildNumber,
-        status: "error",
-        error: err?.message || "Build failed"
-      });
-    }
-
-    throw err;
-  } finally {
-    cleanup();
-    if (repoPath) {
-      try {
-        fs.rmSync(repoPath, { recursive: true, force: true });
-      } catch {
-        // ignore temp dir cleanup errors
+        throw err;
+      } finally {
+        cleanup();
+        if (repoPath) {
+          try {
+            fs.rmSync(repoPath, { recursive: true, force: true });
+          } catch {
+            // ignore temp dir cleanup errors
+          }
+        }
       }
     }
-  }
+  );
 }
 
 /**
@@ -779,7 +848,7 @@ export async function closeOrDeletePreview({
     }
   } catch (err) {
     if (err?.code !== "P2021") {
-      console.warn("Build cancellation during preview teardown warning:", err?.message || err);
+      logger.warn("Build cancellation during preview teardown warning", { err });
     }
   }
 
@@ -788,7 +857,7 @@ export async function closeOrDeletePreview({
     try {
       await containerRemover(containerName);
     } catch (e) {
-      console.warn("Failed to remove container on teardown:", e?.message || e);
+      logger.warn("Failed to remove container on teardown", { containerName, err: e });
     }
   }
 

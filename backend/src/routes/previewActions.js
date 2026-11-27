@@ -11,6 +11,8 @@ import {
 } from "../services/buildOrchestrator.js";
 import { getBuildHistory } from "../services/buildQueueService.js";
 import { enforceBuildQuota } from "../services/quotaService.js";
+import { logger } from "../utils/logger.js";
+import { recordHttpAudit } from "../services/auditService.js";
 
 const router = express.Router();
 
@@ -73,6 +75,14 @@ export async function handleRebuildPreview(req, res) {
       isNewPreview: preview.status === "deleted"
     });
     if (!check.allowed) {
+      await recordHttpAudit(req, {
+        actorUserId: userId,
+        action: "PREVIEW_REBUILD_QUOTA_EXCEEDED",
+        resourceType: "Preview",
+        resourceId: preview.id,
+        status: "DENIED",
+        metadata: { code: check.code }
+      });
       return res.status(429).json({
         error: check.code || "build_limit_reached",
         message: check.message
@@ -99,6 +109,15 @@ export async function handleRebuildPreview(req, res) {
         url: null
       });
 
+      await recordHttpAudit(req, {
+        actorUserId: userId,
+        action: "PREVIEW_REBUILD_TRIGGERED",
+        resourceType: "Preview",
+        resourceId: previewId,
+        status: "SUCCESS",
+        metadata: { force: forceRebuild }
+      });
+
       res.status(202).json({
         ok: true,
         status: "building",
@@ -110,7 +129,7 @@ export async function handleRebuildPreview(req, res) {
         try {
           await customAsyncRebuildWorker({ preview, userId, previewId });
         } catch (e) {
-          console.error("Async rebuild worker uncaught error:", e);
+          logger.error("Async rebuild worker uncaught error", { previewId, err: e });
         }
       })();
       return;
@@ -125,6 +144,15 @@ export async function handleRebuildPreview(req, res) {
       source: "MANUAL_REBUILD"
     });
 
+    await recordHttpAudit(req, {
+      actorUserId: userId,
+      action: "PREVIEW_REBUILD_TRIGGERED",
+      resourceType: "Build",
+      resourceId: build.id,
+      status: "SUCCESS",
+      metadata: { previewId, force: forceRebuild, buildNumber: build.buildNumber }
+    });
+
     return res.status(202).json({
       ok: true,
       status: "building",
@@ -134,7 +162,7 @@ export async function handleRebuildPreview(req, res) {
       buildNumber: build.buildNumber
     });
   } catch (err) {
-    console.error("rebuild error:", err);
+    logger.error("Preview rebuild error", { err, previewId: req.params?.id });
     return res.status(500).json({ error: "Unexpected error" });
   }
 }
@@ -168,9 +196,18 @@ export async function handleCancelPreviewBuild(req, res) {
       userId
     });
 
+    await recordHttpAudit(req, {
+      actorUserId: userId,
+      action: "PREVIEW_CANCELLED",
+      resourceType: "Preview",
+      resourceId: previewId,
+      status: "SUCCESS",
+      metadata: { cancelledCount: result.cancelledCount }
+    });
+
     return res.json({ ok: true, ...result });
   } catch (err) {
-    console.error("cancel preview build error:", err);
+    logger.error("Cancel preview build error", { err, previewId: req.params?.id });
     return res.status(500).json({ error: "Cancel failed" });
   }
 }
@@ -202,9 +239,18 @@ export async function handleDeletePreview(req, res) {
       userId
     });
 
+    await recordHttpAudit(req, {
+      actorUserId: userId,
+      action: "PREVIEW_DELETED",
+      resourceType: "Preview",
+      resourceId: previewId,
+      status: "SUCCESS",
+      metadata: { projectId: preview.projectId, prNumber: preview.prNumber }
+    });
+
     return res.json({ ok: true });
   } catch (err) {
-    console.error("delete preview error:", err);
+    logger.error("Delete preview error", { err, previewId: req.params?.id });
     return res.status(500).json({ error: "Delete failed" });
   }
 }
@@ -245,7 +291,7 @@ export async function handleGetPreviewBuilds(req, res) {
       builds
     });
   } catch (err) {
-    console.error("get preview builds error:", err);
+    logger.error("Get preview builds error", { err, previewId: req.params?.id });
     return res.status(500).json({ error: "Failed to load build history" });
   }
 }

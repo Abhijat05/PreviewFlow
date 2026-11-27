@@ -3,6 +3,7 @@ import passport from "passport";
 import { Strategy as GitHubStrategy } from "passport-github2";
 import { prisma } from "./db.js";
 import { encryptSecret } from "./services/cryptoService.js";
+import { logger } from "./utils/logger.js";
 import "dotenv/config";
 
 passport.use(
@@ -44,7 +45,7 @@ passport.use(
 
         return done(null, user);
       } catch (err) {
-        console.error("GitHub OAuth Error:", err);
+        logger.error("GitHub OAuth strategy error", { err });
         return done(err, null);
       }
     }

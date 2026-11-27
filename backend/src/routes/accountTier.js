@@ -6,6 +6,8 @@ import { requireAuth } from "../middleware/auth.js";
 import { getTierLimits, compareTier, normalizeTier } from "../middleware/tierLimits.js";
 import { removeContainer } from "../services/dockerService.js";
 import { releasePreviewPorts } from "../services/portService.js";
+import { logger } from "../utils/logger.js";
+import { recordHttpAudit } from "../services/auditService.js";
 
 const router = express.Router();
 
@@ -57,6 +59,14 @@ export async function handleChangeTier(req, res) {
       const hasAdminAuth = Boolean(process.env.ADMIN_SECRET && adminToken === process.env.ADMIN_SECRET);
 
       if (!selfServeAllowed && !hasAdminAuth && !clientPaymentToken) {
+        await recordHttpAudit(req, {
+          actorUserId: user.id,
+          action: "TIER_UPGRADE_DENIED",
+          resourceType: "User",
+          resourceId: user.id,
+          status: "DENIED",
+          metadata: { currentTier, targetTier }
+        });
         return res.status(402).json({
           error: "payment_required",
           message: `Upgrades to ${targetTier} require valid payment verification or admin authorization.`
@@ -76,6 +86,15 @@ export async function handleChangeTier(req, res) {
         process.env.JWT_SECRET,
         { expiresIn: "7d" }
       );
+
+      await recordHttpAudit(req, {
+        actorUserId: updatedUser.id,
+        action: "TIER_UPGRADED",
+        resourceType: "User",
+        resourceId: updatedUser.id,
+        status: "SUCCESS",
+        metadata: { currentTier, targetTier }
+      });
 
       return res.json({
         needsCleanup: false,
@@ -182,6 +201,15 @@ export async function handleChangeTier(req, res) {
         { expiresIn: "7d" }
       );
 
+      await recordHttpAudit(req, {
+        actorUserId: updatedUser.id,
+        action: "TIER_DOWNGRADED",
+        resourceType: "User",
+        resourceId: updatedUser.id,
+        status: "SUCCESS",
+        metadata: { currentTier, targetTier, deletedProjectsCount: 0, deletedPreviewsCount: 0 }
+      });
+
       return res.json({
         ...responseSummary,
         needsCleanup: false,
@@ -199,10 +227,11 @@ export async function handleChangeTier(req, res) {
         try {
           await removeContainer(pre.containerName);
         } catch (e) {
-          console.error(
-            `Failed to remove container for preview ${pre.id}:`,
-            e.message
-          );
+          logger.warn("Failed to remove container during tier downgrade", {
+            previewId: pre.id,
+            containerName: pre.containerName,
+            err: e
+          });
         }
       }
       await releasePreviewPorts({ previewId: pre.id }).catch(() => {});
@@ -251,6 +280,20 @@ export async function handleChangeTier(req, res) {
       { expiresIn: "7d" }
     );
 
+    await recordHttpAudit(req, {
+      actorUserId: user.id,
+      action: "TIER_DOWNGRADED",
+      resourceType: "User",
+      resourceId: user.id,
+      status: "SUCCESS",
+      metadata: {
+        currentTier,
+        targetTier,
+        deletedProjectsCount: projectIdsToDelete.length,
+        deletedPreviewsCount: previewIdsToDelete.length
+      }
+    });
+
     return res.json({
       ...responseSummary,
       needsCleanup: false,
@@ -260,7 +303,7 @@ export async function handleChangeTier(req, res) {
       deletedPreviewsCount: previewIdsToDelete.length,
     });
   } catch (err) {
-    console.error("change-tier error:", err);
+    logger.error("Failed to change account tier", { err });
     return res.status(500).json({ error: "internal_error" });
   }
 }
