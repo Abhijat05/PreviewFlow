@@ -1,220 +1,121 @@
-import React, { useEffect, useState, useCallback } from "react";
-import api, { API_BASE_URL } from "../api.js";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
+import api from "../api.js";
 import { useSocket } from "../context/SocketContext.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useNavigate } from "react-router-dom";
-import Logs from "./Logs.jsx"; 
+import Logs from "./Logs.jsx";
 import PlanChangeModal from "../components/PlanChangeModal.jsx";
 import Toast from "../components/Toast.jsx";
-import { formatBytesToMB } from "../lib/utils.js"; 
+import DashboardStatsStrip from "../components/dashboard/DashboardStatsStrip.jsx";
+import ProjectCard from "../components/dashboard/ProjectCard.jsx";
+import ActivityTimeline from "../components/dashboard/ActivityTimeline.jsx";
+import QuickCreateProjectDrawer from "../components/dashboard/QuickCreateProjectDrawer.jsx";
 
 import {
-  GitPullRequest, RefreshCw, Trash2, CheckCircle2, XCircle, Clock, Terminal, Loader2,
-  AlertCircle, Globe, Ban, Archive, Layout, PlusCircle, Lock, Crown, AlertTriangle, X, Settings,
-  Activity, MemoryStick, ExternalLink
+  AlertCircle,
+  Crown,
+  FolderGit2,
+  GitPullRequest,
+  Globe,
+  Layout,
+  Lock,
+  PlusCircle,
+  RefreshCw,
+  Search,
+  Settings,
+  Terminal,
+  Trash2
 } from "lucide-react";
 
-// --- TIER CONFIGURATION ---
 const TIER_CONFIG = {
-  FREE: { label: 'Free', color: 'bg-neutral-100 text-neutral-600 border-neutral-200', concurrentBuilds: 1 },
-  HOBBY: { label: 'Hobby', color: 'bg-blue-50 text-blue-600 border-blue-200', concurrentBuilds: 1 },
-  PRO: { label: 'Pro', color: 'bg-indigo-50 text-indigo-600 border-indigo-200', concurrentBuilds: Infinity },
-  ENTERPRISE: { label: 'Enterprise', color: 'bg-slate-900 text-amber-400 border-slate-700', concurrentBuilds: Infinity }
+  FREE: { label: "Free", color: "bg-neutral-100 text-neutral-600 border-neutral-200", concurrentBuilds: 1 },
+  HOBBY: { label: "Hobby", color: "bg-blue-50 text-blue-600 border-blue-200", concurrentBuilds: 1 },
+  PRO: { label: "Pro", color: "bg-indigo-50 text-indigo-600 border-indigo-200", concurrentBuilds: Infinity },
+  ENTERPRISE: { label: "Enterprise", color: "bg-slate-900 text-amber-400 border-slate-700", concurrentBuilds: Infinity }
 };
 
-// --- HELPERS ---
-function formatDuration(seconds) { 
-  if (!seconds && seconds !== 0) return ""; 
-  const numSeconds = parseFloat(seconds); 
-  if (numSeconds < 60) return `${numSeconds.toFixed(0)}s`; 
-  const m = Math.floor(numSeconds / 60); 
-  const s = Math.floor(numSeconds % 60); 
-  return `${m}m ${s}s`; 
-}
+function deriveFallbackStats(projects = []) {
+  let livePreviews = 0;
+  let buildingPreviews = 0;
+  let errorPreviews = 0;
+  let archivedPreviews = 0;
+  let totalPreviews = 0;
+  let webhookProjects = 0;
 
-function getStatusVisuals(status) { 
-  switch (status) { 
-    case "live": 
-    case "ready": return { badge: "bg-emerald-50 text-emerald-700 border-emerald-200", icon: <CheckCircle2 className="w-3 h-3" />, label: "Ready", border: "hover:border-emerald-300", ring: "" }; 
-    case "building": return { badge: "bg-amber-50 text-amber-700 border-amber-200", icon: <Loader2 className="w-3 h-3 animate-spin text-amber-600" />, label: "Building", border: "border-amber-300", ring: "ring-4 ring-amber-500/10" }; 
-    case "error": return { badge: "bg-red-50 text-red-700 border-red-200", icon: <XCircle className="w-3 h-3" />, label: "Error", border: "hover:border-red-300", ring: "" }; 
-    case "deleted": return { badge: "bg-neutral-100 text-neutral-500 border-neutral-200", icon: <Archive className="w-3 h-3" />, label: "Archived", border: "border-neutral-200 border-dashed bg-neutral-50/50", ring: "" }; 
-    default: return { badge: "bg-neutral-100 text-neutral-600 border-neutral-200", icon: <Clock className="w-3 h-3" />, label: "Queued", border: "hover:border-neutral-300", ring: "" }; 
-  } 
-}
-
-
-
-// --- COMPONENTS ---
-const LiveBuildTimer = ({ startTime }) => {
-  const [elapsed, setElapsed] = useState(0);
-  useEffect(() => {
-    const start = new Date(startTime).getTime();
-    const interval = setInterval(() => setElapsed((Date.now() - start) / 1000), 1000);
-    return () => clearInterval(interval);
-  }, [startTime]);
-  return <span>{formatDuration(elapsed)}</span>;
-};
-
-
-
-// Polished Vercel-style Resource Monitor for Dashboard Cards
-const ResourceMonitor = ({ stats, onClick }) => {
-  if (!stats) {
-    return (
-      <div className="mt-4 pt-4 border-t border-neutral-100 flex flex-col gap-3 opacity-60">
-        <div className="flex justify-between items-center">
-          <div className="h-3 w-8 bg-neutral-200 rounded animate-pulse"></div>
-          <div className="h-3 w-12 bg-neutral-100 rounded animate-pulse"></div>
-        </div>
-        <div className="flex justify-between items-center">
-          <div className="h-3 w-8 bg-neutral-200 rounded animate-pulse"></div>
-          <div className="h-3 w-16 bg-neutral-100 rounded animate-pulse"></div>
-        </div>
-      </div>
-    );
+  for (const proj of projects) {
+    if (proj.hasWebhook) webhookProjects++;
+    for (const pre of proj.previews || []) {
+      const s = String(pre.status || "").toLowerCase();
+      if (s === "deleted") {
+        archivedPreviews++;
+      } else {
+        totalPreviews++;
+        if (s === "live" || s === "ready") livePreviews++;
+        else if (s === "building") buildingPreviews++;
+        else if (s === "error") errorPreviews++;
+      }
+    }
   }
 
-  const { cpu, memory } = stats;
-  const memoryMB = formatBytesToMB(memory);
-  
-  const isCpuHigh = cpu > 70;
-  const isMemoryHigh = memoryMB > 400;
+  return {
+    totalProjects: projects.length,
+    totalPreviews,
+    livePreviews,
+    buildingPreviews,
+    errorPreviews,
+    archivedPreviews,
+    webhookProjects,
+    totalBuilds: 0,
+    completedBuilds: 0,
+    failedBuilds: 0,
+    successRate: null,
+    avgBuildDurationSec: null
+  };
+}
 
+function ProjectCardSkeleton() {
   return (
-    <div 
-      onClick={onClick}
-      className="mt-4 pt-4 border-t border-neutral-100 space-y-3.5 cursor-pointer hover:bg-neutral-50/80 p-3 -mx-3 rounded-xl transition-all group/monitor"
-      title="View Telemetry"
-    >
-      <div className="flex flex-col gap-1.5">
-        <div className="flex justify-between items-baseline text-xs font-mono tracking-tight">
-          <span className="text-neutral-500 flex items-center gap-1.5 uppercase tracking-wider text-[10px]">
-            <Activity className="w-3 h-3 text-neutral-400 group-hover/monitor:text-black transition-colors" /> CPU
-          </span>
-          <span className={isCpuHigh ? "text-red-500 font-bold" : "text-neutral-900 font-semibold"}>
-            {cpu.toFixed(1)}%
-          </span>
+    <div className="bg-white border border-neutral-200 rounded-xl overflow-hidden">
+      <div className="px-5 py-4 border-b border-neutral-100 bg-neutral-50/50 flex justify-between items-center">
+        <div className="space-y-2">
+          <div className="h-4 w-44 bg-neutral-200 rounded animate-pulse" />
+          <div className="h-3 w-32 bg-neutral-100 rounded animate-pulse" />
         </div>
-        <div className="h-1 w-full bg-neutral-100 rounded-full overflow-hidden">
-          <div 
-            className={`h-full transition-all duration-500 ease-out ${isCpuHigh ? "bg-red-500" : "bg-neutral-900"}`}
-            style={{ width: `${Math.min(cpu, 100)}%` }}
-          />
-        </div>
+        <div className="h-8 w-28 bg-neutral-200 rounded animate-pulse" />
       </div>
-
-      <div className="flex flex-col gap-1.5">
-        <div className="flex justify-between items-baseline text-xs font-mono tracking-tight">
-          <span className="text-neutral-500 flex items-center gap-1.5 uppercase tracking-wider text-[10px]">
-            <MemoryStick className="w-3 h-3 text-neutral-400 group-hover/monitor:text-[#0070F3] transition-colors" /> RAM
-          </span>
-          <span className={isMemoryHigh ? "text-amber-500 font-bold" : "text-neutral-900 font-semibold"}>
-            {memoryMB} MB
-          </span>
-        </div>
-        <div className="h-1 w-full bg-neutral-100 rounded-full overflow-hidden">
-          <div 
-            className={`h-full transition-all duration-500 ease-out ${isMemoryHigh ? "bg-amber-500" : "bg-[#0070F3]"}`}
-            style={{ width: `${Math.min((memoryMB / 512) * 100, 100)}%` }} 
-          />
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// Refined Preview Card (Vercel Aesthetic)
-const PreviewCard = React.memo(({ pre, stats, isProcessing, onRebuild, onDeleteConfirm, onViewLogs, onOpenStats }) => {
-  const statusStyle = getStatusVisuals(pre.status);
-  const isDeleted = pre.status === "deleted";
-  const isBuilding = pre.status === "building";
-
-  let timeDisplay = null;
-  if (isBuilding) {
-    timeDisplay = <span className="text-amber-600 animate-pulse"><LiveBuildTimer startTime={pre.buildStartedAt} /></span>;
-  } else if (pre.buildCompletedAt && pre.buildStartedAt) {
-    const diff = (new Date(pre.buildCompletedAt) - new Date(pre.buildStartedAt)) / 1000;
-    timeDisplay = formatDuration(diff);
-  } else {
-    timeDisplay = "Pending...";
-  }
-
-  return (
-    <div className={`group relative bg-white border rounded-xl shadow-sm transition-all duration-300 ease-out flex flex-col h-full overflow-hidden ${statusStyle.border} ${statusStyle.ring} ${!isDeleted && !isBuilding ? 'hover:shadow-md hover:border-neutral-300' : ''}`}>
-      
-      {/* Top Header */}
-      <div className="p-5 pb-0">
-        <div className="flex justify-between items-start mb-4">
-          <div className="flex flex-col gap-1.5">
-            <span className="font-mono text-[10px] font-semibold text-neutral-400 uppercase tracking-widest flex items-center gap-1.5">
-              <GitPullRequest className="w-3.5 h-3.5" /> Pull Request
-            </span>
-            <span className={`text-2xl font-semibold tracking-tight ${isDeleted ? 'text-neutral-400' : 'text-neutral-900'}`}>
-              #{pre.prNumber}
-            </span>
-          </div>
-          <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-bold uppercase tracking-wider transition-all ${statusStyle.badge}`}>
-            {statusStyle.icon}<span>{statusStyle.label}</span>
-          </div>
-        </div>
-
-        {/* Time & URL Section */}
-        <div className="space-y-3">
-            <div className={`flex items-center gap-2 text-xs text-neutral-500 font-medium transition-opacity duration-300 ${isDeleted ? 'opacity-0' : 'opacity-100'}`}>
-                <Clock className="w-3.5 h-3.5 text-neutral-400" />
-                {timeDisplay}
+      <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+        {[1, 2].map((i) => (
+          <div key={i} className="border border-neutral-200 rounded-lg p-4 space-y-3">
+            <div className="flex justify-between">
+              <div className="h-5 w-16 bg-neutral-200 rounded animate-pulse" />
+              <div className="h-5 w-16 bg-neutral-100 rounded-full animate-pulse" />
             </div>
-            
-            {pre.status === "live" || pre.status === "ready" ? (
-              <a href={pre.url} target="_blank" rel="noopener noreferrer" className="group/url flex items-center justify-between w-full bg-neutral-50 hover:bg-neutral-100 border border-neutral-200 px-3 py-2.5 rounded-lg transition-all duration-200">
-                <div className="flex items-center gap-2 overflow-hidden">
-                  <Globe className="w-4 h-4 text-neutral-400" />
-                  <span className="text-xs font-mono text-neutral-700 truncate group-hover/url:text-blue-600 transition-colors">
-                    {pre.url?.replace(/^https?:\/\//, '')}
-                  </span>
-                </div>
-                <ExternalLink className="w-3.5 h-3.5 text-neutral-400 opacity-0 group-hover/url:opacity-100 transition-opacity group-hover/url:text-blue-500" />
-              </a>
-            ) : (
-                <div className="w-full h-[42px] flex items-center px-3 bg-neutral-50/50 border border-neutral-100 border-dashed rounded-lg text-xs text-neutral-400 font-mono">
-                  {isBuilding ? <span className="flex items-center gap-2 text-amber-600">Building environment...</span> : isDeleted ? <span className="text-neutral-400 flex items-center gap-2"><Ban className="w-3.5 h-3.5"/> Deployment inactive</span> : 'Waiting for deployment...'}
-                </div>
-            )}
-        </div>
-
-        {/* Live Resource Monitor */}
-        {(pre.status === "live" || pre.status === "ready") && (
-          <ResourceMonitor stats={stats} onClick={() => onOpenStats(pre)} />
-        )}
-      </div>
-      
-      {/* Separated Action Footer */}
-      <div className="mt-auto p-4 border-t border-neutral-100 bg-neutral-50/50 flex items-center justify-between">
-          <button onClick={() => onViewLogs(pre.id)} className="text-xs font-semibold text-neutral-700 bg-white border border-neutral-200 hover:border-neutral-300 hover:bg-neutral-50 px-4 py-2 rounded-lg flex items-center gap-2 transition-all active:scale-95 shadow-sm group/btn">
-            <Terminal className="w-3.5 h-3.5 text-neutral-500 group-hover/btn:text-neutral-900 transition-colors" /> View Logs
-          </button>
-          
-          <div className="flex items-center gap-1.5">
-            <button onClick={() => onRebuild(pre)} disabled={isProcessing} className={`p-2 border border-transparent rounded-lg transition-all active:scale-90 ${isBuilding ? 'text-neutral-300 cursor-not-allowed' : 'text-neutral-500 hover:text-blue-600 hover:bg-blue-50 hover:border-blue-100'}`} title="Redeploy">
-              <RefreshCw className={`w-4 h-4 ${isProcessing ? "animate-spin" : ""}`} />
-            </button>
-            <button onClick={() => onDeleteConfirm(pre)} disabled={isProcessing || isDeleted} className={`p-2 border border-transparent rounded-lg transition-all active:scale-90 ${isDeleted ? 'text-neutral-200 cursor-not-allowed' : 'text-neutral-500 hover:text-red-600 hover:bg-red-50 hover:border-red-100'}`} title="Delete">
-              <Trash2 className="w-4 h-4" />
-            </button>
+            <div className="h-8 w-full bg-neutral-100 rounded animate-pulse" />
+            <div className="h-7 w-24 bg-neutral-100 rounded animate-pulse" />
           </div>
+        ))}
       </div>
     </div>
   );
-});
+}
 
 export default function Dashboard() {
   const [projects, setProjects] = useState([]);
+  const [serverStats, setServerStats] = useState(null);
+  const [recentBuilds, setRecentBuilds] = useState([]);
+  const [activity, setActivity] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
   const [processingPreview, setProcessingPreview] = useState(null);
   const [activeLogId, setActiveLogId] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [toast, setToast] = useState(null);
   const [isPlanModalOpen, setIsPlanModalOpen] = useState(false);
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [stats, setStats] = useState({});
 
   const token = localStorage.getItem("token");
@@ -222,29 +123,80 @@ export default function Dashboard() {
   const { socket, joinPreview } = useSocket();
   const { tier: currentTier, refreshUser } = useAuth();
 
-  const refreshData = useCallback(async () => {
-    if (!token) return;
-    try {
-      const [projRes] = await Promise.all([
-        api.get("/api/projects"),
-        refreshUser()
-      ]);
-      setProjects(projRes.data);
-    } catch (err) {
-      console.error("Failed to refresh data", err);
+  const applyDashboardPayload = useCallback((payload) => {
+    if (Array.isArray(payload)) {
+      setProjects(payload);
+      setServerStats(null);
+      setRecentBuilds([]);
+      setActivity([]);
+      return;
     }
-  }, [token, refreshUser]);
+
+    if (payload && Array.isArray(payload.projects)) {
+      setProjects(payload.projects);
+      setServerStats(payload.stats || null);
+      setRecentBuilds(Array.isArray(payload.recentBuilds) ? payload.recentBuilds : []);
+      setActivity(Array.isArray(payload.activity) ? payload.activity : []);
+    }
+  }, []);
+
+  const refreshData = useCallback(
+    async ({ silent = false } = {}) => {
+      if (!token) {
+        setLoading(false);
+        return;
+      }
+
+      if (silent) setRefreshing(true);
+      else setLoading(true);
+      setLoadError(null);
+
+      try {
+        let overviewRes;
+        try {
+          overviewRes = await api.get("/api/dashboard/overview");
+        } catch (err) {
+          if (err?.response?.status === 404) {
+            overviewRes = await api.get("/api/projects");
+          } else {
+            throw err;
+          }
+        }
+
+        await refreshUser().catch(() => {});
+        applyDashboardPayload(overviewRes?.data);
+      } catch (err) {
+        const message =
+          err?.response?.data?.message ||
+          err?.response?.data?.error ||
+          err?.message ||
+          "Unable to load dashboard data.";
+        setLoadError(message);
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [token, refreshUser, applyDashboardPayload]
+  );
 
   useEffect(() => {
-    if (!token) return;
+    if (!token) {
+      setLoading(false);
+      return;
+    }
+
     refreshData();
 
-    const controller = new AbortController();
-
     const handleStatusUpdate = (update) => {
-      setProjects((old) => old.map((project) => {
+      setProjects((old) =>
+        old.map((project) => {
           if (project.id !== update.projectId) return project;
-          return { ...project, previews: project.previews.map((pre) => pre.prNumber === update.prNumber ? { ...pre, ...update } : pre) };
+          const exists = (project.previews || []).some((pre) => pre.prNumber === update.prNumber);
+          const nextPreviews = exists
+            ? project.previews.map((pre) => (pre.prNumber === update.prNumber ? { ...pre, ...update } : pre))
+            : [{ id: update.previewId, ...update }, ...(project.previews || [])];
+          return { ...project, previews: nextPreviews };
         })
       );
     };
@@ -260,7 +212,7 @@ export default function Dashboard() {
           networkRx: payload.networkRx,
           networkTx: payload.networkTx,
           uptime: payload.uptime
-        },
+        }
       }));
     };
 
@@ -268,17 +220,16 @@ export default function Dashboard() {
       socket.on("preview-status-update", handleStatusUpdate);
       socket.on("preview-stats-update", handleStatsUpdate);
     }
-    
+
     return () => {
       if (socket) {
         socket.off("preview-status-update", handleStatusUpdate);
         socket.off("preview-stats-update", handleStatsUpdate);
       }
-      controller.abort();
     };
   }, [token, socket, refreshData]);
 
-  // Subscribe to preview rooms for real-time telemetry
+  // Subscribe to active preview rooms for telemetry & build status updates
   useEffect(() => {
     if (!projects.length) return;
     projects.forEach((proj) => {
@@ -290,121 +241,459 @@ export default function Dashboard() {
     });
   }, [projects, joinPreview]);
 
-  const activeBuildsCount = projects.reduce((acc, proj) => 
-    acc + proj.previews.filter(p => p.status === 'building').length, 0
+  const activeBuildsCount = useMemo(
+    () =>
+      projects.reduce(
+        (acc, proj) => acc + (proj.previews || []).filter((p) => p.status === "building").length,
+        0
+      ),
+    [projects]
   );
-  
+
+  const computedStats = useMemo(() => {
+    const derived = deriveFallbackStats(projects);
+    if (!serverStats) return derived;
+    return {
+      ...derived,
+      ...serverStats,
+      webhookProjects: derived.webhookProjects
+    };
+  }, [projects, serverStats]);
+
+  const filteredProjects = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+
+    return projects
+      .map((proj) => {
+        const repoMatches =
+          !query ||
+          proj.repoName.toLowerCase().includes(query) ||
+          proj.repoOwner.toLowerCase().includes(query) ||
+          (proj.framework && proj.framework.toLowerCase().includes(query));
+
+        const previews = (proj.previews || []).filter((pre) => {
+          if (statusFilter === "live" && pre.status !== "live" && pre.status !== "ready") return false;
+          if (statusFilter === "building" && pre.status !== "building") return false;
+          if (statusFilter === "error" && pre.status !== "error") return false;
+          if (query && !repoMatches) {
+            return `#${pre.prNumber}`.includes(query) || String(pre.prNumber).includes(query);
+          }
+          return true;
+        });
+
+        if (statusFilter !== "all" && previews.length === 0) return null;
+        if (query && !repoMatches && previews.length === 0) return null;
+
+        return {
+          ...proj,
+          previews: statusFilter === "all" && repoMatches ? proj.previews || [] : previews
+        };
+      })
+      .filter(Boolean);
+  }, [projects, searchQuery, statusFilter]);
+
   const tierConfig = TIER_CONFIG[currentTier] || TIER_CONFIG.FREE;
 
-  const handleRebuild = useCallback(async (pre) => {
-    if (activeBuildsCount >= tierConfig.concurrentBuilds) {
-      setToast({ type: 'warning', message: `Build Queue Full. ${tierConfig.label} tier limit: ${tierConfig.concurrentBuilds}.` });
-      return;
-    }
-    setProcessingPreview(pre.id);
-    try { await api.post(`/api/preview/${pre.id}/rebuild`, {}); } catch(e) { console.error(e); }
-    setProcessingPreview(null);
-  }, [activeBuildsCount, tierConfig]);
+  const handleRebuild = useCallback(
+    async (pre) => {
+      if (activeBuildsCount >= tierConfig.concurrentBuilds) {
+        setToast({
+          type: "warning",
+          message: `Build queue full (${tierConfig.label} limit: ${tierConfig.concurrentBuilds}).`
+        });
+        return;
+      }
+
+      setProcessingPreview(pre.id);
+      try {
+        await api.post(`/api/preview/${pre.id}/rebuild`, {});
+        setProjects((old) =>
+          old.map((proj) => ({
+            ...proj,
+            previews: (proj.previews || []).map((item) =>
+              item.id === pre.id ? { ...item, status: "building", buildStartedAt: new Date().toISOString() } : item
+            )
+          }))
+        );
+        setToast({ type: "success", message: `Redeploy triggered for PR #${pre.prNumber}.` });
+      } catch (err) {
+        setToast({
+          type: "error",
+          message:
+            err?.response?.data?.message ||
+            err?.response?.data?.error ||
+            "Failed to trigger redeploy."
+        });
+      } finally {
+        setProcessingPreview(null);
+      }
+    },
+    [activeBuildsCount, tierConfig]
+  );
 
   const handleDeleteConfirm = useCallback((pre) => setDeleteConfirm(pre), []);
   const handleViewLogs = useCallback((id) => setActiveLogId(id), []);
-  const handleOpenStats = useCallback((pre) => navigate(`/metrics/${pre.id}`, { state: { preview: pre } }), [navigate]);
+  const handleOpenStats = useCallback(
+    (pre) => navigate(`/metrics/${pre.id}`, { state: { preview: pre } }),
+    [navigate]
+  );
 
   const confirmDelete = async () => {
     if (!deleteConfirm) return;
     const pre = deleteConfirm;
     setProcessingPreview(pre.id);
     setDeleteConfirm(null);
-    try { await api.post(`/api/preview/${pre.id}/delete`, {}); } catch(e) { console.error(e); }
-    setProcessingPreview(null);
+    try {
+      await api.post(`/api/preview/${pre.id}/delete`, {});
+      setProjects((old) =>
+        old.map((proj) => ({
+          ...proj,
+          previews: (proj.previews || []).map((item) =>
+            item.id === pre.id ? { ...item, status: "deleted", url: null } : item
+          )
+        }))
+      );
+      setToast({ type: "success", message: `Preview PR #${pre.prNumber} deleted.` });
+    } catch (err) {
+      setToast({
+        type: "error",
+        message:
+          err?.response?.data?.message ||
+          err?.response?.data?.error ||
+          "Failed to delete preview."
+      });
+    } finally {
+      setProcessingPreview(null);
+    }
   };
 
   return (
-    <div className="min-h-screen bg-white text-neutral-900 font-sans p-8 md:p-12 relative overflow-x-hidden">
-      {/* Subtle Dot Grid Background */}
-      <div className="absolute inset-0 z-0 opacity-[0.25] pointer-events-none" style={{ backgroundImage: 'radial-gradient(#d4d4d8 1px, transparent 1px)', backgroundSize: '24px 24px' }}></div>
-
+    <div className="min-h-screen bg-[#fafafa] text-neutral-900 font-sans relative overflow-x-hidden">
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
 
-      <PlanChangeModal isOpen={isPlanModalOpen} onClose={() => setIsPlanModalOpen(false)} currentTier={currentTier} onPlanChanged={refreshData} showToast={(msg, type) => setToast({ message: msg, type })} />
+      <PlanChangeModal
+        isOpen={isPlanModalOpen}
+        onClose={() => setIsPlanModalOpen(false)}
+        currentTier={currentTier}
+        onPlanChanged={() => refreshData({ silent: true })}
+        showToast={(msg, type) => setToast({ message: msg, type })}
+      />
 
-      <div className="max-w-7xl mx-auto relative z-10">
-        
-        {/* Main Header */}
-        <div className="flex items-center justify-between mb-16 border-b border-neutral-200 pb-6">
-           <div className="flex items-center gap-4">
-              <div className="p-2.5 bg-white border border-neutral-200 rounded-xl shadow-sm"><Layout className="w-6 h-6 text-neutral-900" /></div>
-              <div>
-                <h1 className="text-2xl font-semibold tracking-tight text-neutral-900">Dashboard</h1>
-                <div className="flex items-center gap-2 mt-1.5">
-                  <span className="text-xs text-neutral-500 font-medium tracking-wide">Current Plan:</span>
-                  <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wider uppercase border ${tierConfig.color} flex items-center gap-1`}>
-                    {currentTier === 'PRO' || currentTier === 'ENTERPRISE' ? <Crown size={10} /> : <Lock size={10} />}
-                    {tierConfig.label}
-                  </span>
-                  <button onClick={() => setIsPlanModalOpen(true)} className="ml-2 px-2 py-0.5 text-[10px] font-medium bg-white border border-neutral-200 rounded-md hover:bg-neutral-50 hover:text-black text-neutral-500 transition-colors flex items-center gap-1">
-                    <Settings size={10} /> Change Plan
-                  </button>
-                </div>
+      <QuickCreateProjectDrawer
+        isOpen={isCreateOpen}
+        onClose={() => setIsCreateOpen(false)}
+        existingProjects={projects}
+        userTier={currentTier}
+        onProjectCreated={() => refreshData({ silent: true })}
+        showToast={(msg, type) => setToast({ message: msg, type })}
+      />
+
+      {/* Sticky Top Control Bar */}
+      <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-neutral-200">
+        <div className="max-w-7xl mx-auto px-6 md:px-10 py-4 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3.5">
+            <button
+              type="button"
+              onClick={() => navigate("/")}
+              className="p-2 bg-neutral-950 text-white rounded-lg shadow-xs hover:bg-neutral-800 transition-colors"
+              aria-label="PreviewFlow home"
+            >
+              <Layout className="w-5 h-5" />
+            </button>
+            <div>
+              <h1 className="text-xl font-semibold tracking-tight text-neutral-950">Dashboard</h1>
+              <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                <span className="text-xs text-neutral-500">Current Plan:</span>
+                <span
+                  className={`px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wider uppercase border ${tierConfig.color} inline-flex items-center gap-1`}
+                >
+                  {currentTier === "PRO" || currentTier === "ENTERPRISE" ? <Crown size={10} /> : <Lock size={10} />}
+                  {tierConfig.label}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsPlanModalOpen(true)}
+                  className="px-2 py-0.5 text-[11px] font-medium bg-white border border-neutral-200 rounded-md hover:bg-neutral-50 text-neutral-600 transition-colors inline-flex items-center gap-1"
+                >
+                  <Settings size={10} /> Change Plan
+                </button>
               </div>
-           </div>
-           <button onClick={() => navigate('/connect')} className="group bg-neutral-900 hover:bg-black text-white px-5 py-2.5 rounded-lg text-sm font-medium flex items-center gap-2 transition-all shadow-sm hover:shadow active:scale-95">
-              <PlusCircle size={16} className="text-neutral-400 group-hover:text-white transition-colors" /> Import Repository
-           </button>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => refreshData({ silent: true })}
+              disabled={loading || refreshing}
+              className="px-3 py-2 text-xs font-medium bg-white border border-neutral-200 hover:border-neutral-300 hover:bg-neutral-50 text-neutral-700 rounded-lg inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
+              title="Refresh overview"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
+              Refresh
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsCreateOpen(true)}
+              className="bg-neutral-950 hover:bg-black text-white px-4 py-2 rounded-lg text-sm font-medium inline-flex items-center gap-2 transition-colors shadow-xs"
+            >
+              <PlusCircle size={15} />
+              Create Project
+            </button>
+          </div>
         </div>
+      </header>
 
-        {/* Project List */}
-        <div className="space-y-16">
-          {projects.map((project) => (
-            <div key={project.id} className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <div className="flex items-center gap-3 mb-6 ml-1">
-                <GitPullRequest className="w-5 h-5 text-neutral-400" />
-                <h2 className="text-xl font-semibold tracking-tight text-neutral-900">
-                  {project.repoName}
-                  <span className="text-neutral-400 font-normal ml-1 text-base">/{project.repoOwner}</span>
-                </h2>
+      <main className="max-w-7xl mx-auto px-6 md:px-10 py-8 space-y-6">
+        {/* Deployment Statistics Strip */}
+        <DashboardStatsStrip
+          stats={computedStats}
+          tierConfig={tierConfig}
+          activeBuildsCount={activeBuildsCount}
+          loading={loading && projects.length === 0}
+        />
+
+        {/* Non-blocking Error Banner when cached data exists */}
+        {loadError && projects.length > 0 && (
+          <div
+            role="alert"
+            className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3"
+          >
+            <div className="flex items-center gap-2.5 text-sm text-red-900">
+              <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+              <span>Failed to refresh overview: {loadError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => refreshData({ silent: true })}
+              className="px-3 py-1 text-xs font-medium bg-white border border-red-200 text-red-700 hover:bg-red-50 rounded-md"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {/* Initial Loading Skeleton State */}
+        {loading && projects.length === 0 ? (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            <div className="lg:col-span-8 space-y-5">
+              <ProjectCardSkeleton />
+              <ProjectCardSkeleton />
+            </div>
+            <div className="lg:col-span-4">
+              <ActivityTimeline loading />
+            </div>
+          </div>
+        ) : loadError && projects.length === 0 ? (
+          /* Full Error Recovery State */
+          <div
+            role="alert"
+            className="bg-white border border-red-200 rounded-xl p-10 text-center max-w-xl mx-auto shadow-xs space-y-4"
+          >
+            <div className="w-11 h-11 rounded-full bg-red-50 border border-red-100 flex items-center justify-center mx-auto">
+              <AlertCircle className="w-5 h-5 text-red-600" />
+            </div>
+            <div>
+              <h2 className="text-base font-semibold text-neutral-950">Could not load your dashboard</h2>
+              <p className="text-sm text-neutral-600 mt-1">{loadError}</p>
+            </div>
+            <div className="flex justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => refreshData()}
+                className="px-4 py-2 text-sm font-medium bg-neutral-950 hover:bg-black text-white rounded-lg inline-flex items-center gap-2"
+              >
+                <RefreshCw className="w-4 h-4" /> Retry Load
+              </button>
+            </div>
+          </div>
+        ) : projects.length === 0 ? (
+          /* First-Run Onboarding Empty State */
+          <div className="bg-white border border-neutral-200 rounded-xl p-10 text-center shadow-xs space-y-8">
+            <div className="max-w-md mx-auto space-y-2">
+              <div className="w-11 h-11 rounded-xl bg-neutral-100 border border-neutral-200 flex items-center justify-center mx-auto">
+                <FolderGit2 className="w-5 h-5 text-neutral-800" />
               </div>
+              <h2 className="text-lg font-semibold text-neutral-950">Connect your first repository</h2>
+              <p className="text-sm text-neutral-600">
+                Link a GitHub repository to automatically spin up isolated preview environments and live logs on every pull request.
+              </p>
+            </div>
 
-              {project.previews.length === 0 ? (
-                 <div className="p-12 border border-dashed border-neutral-300 rounded-2xl bg-white text-center"><p className="text-neutral-500 text-sm">Waiting for Pull Requests...</p></div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {project.previews.map((pre) => (
-                    <PreviewCard key={pre.id} pre={pre} stats={stats[pre.id]} isProcessing={processingPreview === pre.id} onRebuild={handleRebuild} onDeleteConfirm={handleDeleteConfirm} onViewLogs={handleViewLogs} onOpenStats={handleOpenStats} />
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-2xl mx-auto text-left">
+              <div className="p-4 border border-neutral-200 rounded-lg bg-neutral-50/50 space-y-1">
+                <FolderGit2 className="w-4 h-4 text-neutral-700" />
+                <p className="text-xs font-semibold text-neutral-900">1. Create project</p>
+                <p className="text-xs text-neutral-500">Pick any repository you maintain on GitHub.</p>
+              </div>
+              <div className="p-4 border border-neutral-200 rounded-lg bg-neutral-50/50 space-y-1">
+                <GitPullRequest className="w-4 h-4 text-neutral-700" />
+                <p className="text-xs font-semibold text-neutral-900">2. Open a Pull Request</p>
+                <p className="text-xs text-neutral-500">Webhooks detect your framework and build commits.</p>
+              </div>
+              <div className="p-4 border border-neutral-200 rounded-lg bg-neutral-50/50 space-y-1">
+                <Terminal className="w-4 h-4 text-neutral-700" />
+                <p className="text-xs font-semibold text-neutral-900">3. Inspect & verify</p>
+                <p className="text-xs text-neutral-500">Stream build logs, live CPU/RAM metrics, and URLs.</p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => navigate("/connect")}
+                className="bg-neutral-950 hover:bg-black text-white px-5 py-2.5 rounded-lg text-sm font-medium inline-flex items-center gap-2 transition-colors"
+              >
+                <PlusCircle size={16} />
+                Import Repository
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsCreateOpen(true)}
+                className="bg-white border border-neutral-200 hover:border-neutral-300 text-neutral-800 px-4 py-2.5 rounded-lg text-sm font-medium inline-flex items-center gap-2 transition-colors"
+              >
+                Quick Connect Drawer
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* Populated Control-Plane Workspace */
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            <div className="lg:col-span-8 space-y-5">
+              {/* Search & Status Filter Toolbar */}
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="relative flex-1 min-w-[220px]">
+                  <Search className="w-4 h-4 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Filter projects, frameworks, or #PR..."
+                    aria-label="Filter projects"
+                    className="w-full pl-9 pr-3 py-2 text-sm bg-white border border-neutral-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-neutral-900/10 focus:border-neutral-400"
+                  />
+                </div>
+
+                <div className="inline-flex bg-white border border-neutral-200 p-0.5 rounded-lg text-xs">
+                  {[
+                    { key: "all", label: "All" },
+                    { key: "live", label: "Live" },
+                    { key: "building", label: "In Progress" },
+                    { key: "error", label: "Errors" }
+                  ].map((opt) => (
+                    <button
+                      key={opt.key}
+                      type="button"
+                      onClick={() => setStatusFilter(opt.key)}
+                      className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
+                        statusFilter === opt.key
+                          ? "bg-neutral-900 text-white"
+                          : "text-neutral-600 hover:text-neutral-900"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
                   ))}
                 </div>
+              </div>
+
+              {filteredProjects.length === 0 ? (
+                <div className="bg-white border border-dashed border-neutral-300 rounded-xl p-10 text-center space-y-3">
+                  <Globe className="w-5 h-5 text-neutral-300 mx-auto" />
+                  <p className="text-sm font-medium text-neutral-800">No deployments match your filters</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchQuery("");
+                      setStatusFilter("all");
+                    }}
+                    className="px-3.5 py-1.5 text-xs font-medium bg-white border border-neutral-200 hover:border-neutral-300 rounded-md text-neutral-700"
+                  >
+                    Reset filters
+                  </button>
+                </div>
+              ) : (
+                filteredProjects.map((project) => (
+                  <ProjectCard
+                    key={project.id}
+                    project={project}
+                    statsMap={stats}
+                    processingPreview={processingPreview}
+                    onRebuild={handleRebuild}
+                    onDeleteConfirm={handleDeleteConfirm}
+                    onViewLogs={handleViewLogs}
+                    onOpenStats={handleOpenStats}
+                  />
+                ))
               )}
             </div>
-          ))}
-        </div>
-      </div>
 
-      {/* Logs Overlay */}
-      <div className={`fixed inset-0 bg-neutral-900/20 backdrop-blur-[2px] z-40 transition-opacity duration-300 ${activeLogId ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`} onClick={() => setActiveLogId(null)} />
-      <div className={`fixed top-0 right-0 h-full w-full md:w-[650px] lg:w-[900px] bg-[#09090b] shadow-2xl z-50 transform transition-transform duration-300 ease-[cubic-bezier(0.25,1,0.5,1)] ${activeLogId ? "translate-x-0" : "translate-x-full"}`}>
+            <div className="lg:col-span-4 lg:sticky lg:top-24">
+              <ActivityTimeline
+                recentBuilds={recentBuilds}
+                activity={activity}
+                loading={loading}
+                onViewLogs={handleViewLogs}
+                onQuickRebuild={handleRebuild}
+              />
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* Logs Overlay Drawer */}
+      <div
+        className={`fixed inset-0 bg-neutral-900/20 backdrop-blur-[2px] z-40 transition-opacity duration-300 ${
+          activeLogId ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+        }`}
+        onClick={() => setActiveLogId(null)}
+      />
+      <div
+        className={`fixed top-0 right-0 h-full w-full md:w-[650px] lg:w-[900px] bg-[#09090b] shadow-2xl z-50 transform transition-transform duration-300 ease-[cubic-bezier(0.25,1,0.5,1)] ${
+          activeLogId ? "translate-x-0" : "translate-x-full"
+        }`}
+      >
         {activeLogId && <Logs previewId={activeLogId} onClose={() => setActiveLogId(null)} />}
       </div>
-      
-      {/* Delete Confirmation Modal */}
+
+      {/* Delete Confirmation Dialog */}
       {deleteConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="absolute inset-0 bg-white/80 backdrop-blur-sm" onClick={() => setDeleteConfirm(null)} />
-          <div className="relative bg-white border border-neutral-200 rounded-2xl shadow-xl max-w-sm w-full p-6 zoom-in-95">
-            <div className="w-10 h-10 bg-red-50 rounded-full flex items-center justify-center mb-4"><Trash2 className="w-5 h-5 text-red-600" /></div>
-            <h3 className="text-lg font-semibold tracking-tight text-neutral-900 mb-2">Delete Deployment?</h3>
-            <p className="text-neutral-500 text-sm leading-relaxed mb-6">This will permanently remove <span className="font-mono font-bold text-neutral-900 bg-neutral-100 px-1.5 py-0.5 rounded border border-neutral-200">PR-{deleteConfirm.prNumber}</span>.</p>
-            <div className="flex justify-end gap-3">
-              <button onClick={() => setDeleteConfirm(null)} className="px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-50 rounded-lg transition-colors border border-transparent">Cancel</button>
-              <button onClick={confirmDelete} className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg shadow-sm transition-all active:scale-95">Confirm</button>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="absolute inset-0 bg-neutral-950/30 backdrop-blur-[1px]" onClick={() => setDeleteConfirm(null)} />
+          <div className="relative bg-white border border-neutral-200 rounded-xl shadow-xl max-w-sm w-full p-6">
+            <div className="w-10 h-10 bg-red-50 rounded-full flex items-center justify-center mb-4">
+              <Trash2 className="w-5 h-5 text-red-600" />
+            </div>
+            <h3 className="text-base font-semibold tracking-tight text-neutral-950 mb-1.5">
+              Delete Deployment?
+            </h3>
+            <p className="text-neutral-600 text-sm leading-relaxed mb-6">
+              This will permanently remove{" "}
+              <span className="font-mono font-semibold text-neutral-900 bg-neutral-100 px-1.5 py-0.5 rounded border border-neutral-200">
+                PR-{deleteConfirm.prNumber}
+              </span>
+              .
+            </p>
+            <div className="flex justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirm(null)}
+                className="px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-50 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDelete}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg shadow-xs transition-colors"
+              >
+                Confirm
+              </button>
             </div>
           </div>
         </div>
       )}
-
-      <style>{`
-        @keyframes progress-indeterminate { 0% { transform: translateX(-100%) scaleX(0.2); } 50% { transform: translateX(0%) scaleX(0.5); } 100% { transform: translateX(100%) scaleX(0.2); } }
-        .animate-progress-indeterminate { animation: progress-indeterminate 1.5s infinite linear; }
-      `}</style>
     </div>
   );
 }
