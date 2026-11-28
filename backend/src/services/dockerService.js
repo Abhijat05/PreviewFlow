@@ -1014,7 +1014,8 @@ export async function buildPreview({
       containerName,
       port: assignedPort,
       imageName,
-      logs
+      logs,
+      detectedFramework: projectConfig.type
     };
   } catch (err) {
     if (containerStarted) {

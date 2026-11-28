@@ -20,6 +20,8 @@ router.get("/repos", requireAuth, async (req, res) => {
         name: repo.name,
         owner: repo.owner.login,
         fullName: repo.full_name,
+        isPrivate: Boolean(repo.private),
+        language: repo.language || null,
       }))
     );
   } catch (err) {

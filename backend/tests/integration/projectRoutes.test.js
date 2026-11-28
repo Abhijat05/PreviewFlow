@@ -258,4 +258,186 @@ describe("5.4 Project, Logs & Metrics API Integration Tests", () => {
     assert.equal(res.status, 403);
     assert.equal(res.body.error, "webhook_not_allowed");
   });
+
+  /* ---------------- PHASE 4A FRAMEWORK & DASHBOARD OVERVIEW ---------------- */
+
+  test("POST /api/connect-repo persists normalized framework preset when provided", async () => {
+    setRepoAccessVerifier(async () => true);
+    prisma.project.count = async () => 0;
+    prisma.project.findFirst = async () => null;
+
+    const capturedPayloads = [];
+    prisma.project.create = async ({ data }) => {
+      capturedPayloads.push(data);
+      return {
+        id: `proj_${capturedPayloads.length}`,
+        ...data,
+        framework: data.framework ?? null,
+        webhookId: null,
+        createdAt: new Date("2026-11-28T08:00:00Z")
+      };
+    };
+
+    const origAuditCreate = prisma.auditLog?.create;
+    if (prisma.auditLog) {
+      prisma.auditLog.create = async () => ({ id: "audit_mock" });
+    }
+
+    try {
+      const validRes = await request(app)
+        .post("/api/connect-repo")
+        .set("Authorization", `Bearer ${freeToken}`)
+        .send({ repoOwner: "octocat", repoName: "portal-web", framework: "  NextJS " });
+
+      assert.equal(validRes.status, 200);
+      assert.equal(validRes.body.project.framework, "nextjs");
+      assert.equal(capturedPayloads[0].framework, "nextjs");
+
+      const invalidFwRes = await request(app)
+        .post("/api/connect-repo")
+        .set("Authorization", `Bearer ${freeToken}`)
+        .send({ repoOwner: "octocat", repoName: "legacy-app", framework: "rails" });
+
+      assert.equal(invalidFwRes.status, 200);
+      assert.equal(invalidFwRes.body.project.framework, null);
+      assert.equal(capturedPayloads[1].framework, undefined);
+    } finally {
+      if (prisma.auditLog && origAuditCreate) {
+        prisma.auditLog.create = origAuditCreate;
+      }
+    }
+  });
+
+  test("GET /api/dashboard/overview rejects unauthenticated requests with 401", async () => {
+    const res = await request(app).get("/api/dashboard/overview");
+    assert.equal(res.status, 401);
+  });
+
+  test("GET /api/dashboard/overview returns masked projects, framework, stats, builds, and activity timeline", async () => {
+    prisma.project.findMany = async () => [
+      {
+        id: "proj_ov_1",
+        userId: testUserId,
+        repoOwner: "octocat",
+        repoName: "next-dashboard",
+        framework: "nextjs",
+        webhookSecret: "enc_super_secret",
+        accessToken: "enc_ghp_secret",
+        webhookId: "hook_42",
+        createdAt: new Date("2026-11-25T10:00:00Z"),
+        previews: [
+          { id: "prev_live", prNumber: 12, status: "live", url: "http://pr-12.localhost:3000" },
+          { id: "prev_err", prNumber: 13, status: "error", url: null },
+          { id: "prev_arch", prNumber: 10, status: "deleted", url: null }
+        ]
+      }
+    ];
+
+    const origBuildFindMany = prisma.build?.findMany;
+    const origBuildCount = prisma.build?.count;
+    const origAuditFindMany = prisma.auditLog?.findMany;
+
+    if (prisma.build) {
+      prisma.build.findMany = async () => [
+        {
+          id: "bld_2",
+          previewId: "prev_err",
+          buildNumber: 2,
+          commitSha: "deadbeef1234",
+          commitMessage: "Fix build",
+          branch: "fix/header",
+          source: "WEBHOOK",
+          status: "FAILED",
+          queuedAt: new Date("2026-11-28T09:50:00Z"),
+          startedAt: new Date("2026-11-28T09:50:05Z"),
+          completedAt: null,
+          failedAt: new Date("2026-11-28T09:50:15Z"),
+          errorMessage: "Exit code 1",
+          preview: {
+            id: "prev_err",
+            prNumber: 13,
+            url: null,
+            project: { id: "proj_ov_1", repoOwner: "octocat", repoName: "next-dashboard", framework: "nextjs" }
+          }
+        },
+        {
+          id: "bld_1",
+          previewId: "prev_live",
+          buildNumber: 1,
+          commitSha: "abcdef123456",
+          commitMessage: "Add cards",
+          branch: "feat/cards",
+          source: "WEBHOOK",
+          status: "COMPLETED",
+          queuedAt: new Date("2026-11-28T09:00:00Z"),
+          startedAt: new Date("2026-11-28T09:00:02Z"),
+          completedAt: new Date("2026-11-28T09:00:14Z"),
+          failedAt: null,
+          errorMessage: null,
+          preview: {
+            id: "prev_live",
+            prNumber: 12,
+            url: "http://pr-12.localhost:3000",
+            project: { id: "proj_ov_1", repoOwner: "octocat", repoName: "next-dashboard", framework: "nextjs" }
+          }
+        }
+      ];
+
+      prisma.build.count = async ({ where }) => {
+        if (where?.status === "COMPLETED") return 3;
+        if (where?.status === "FAILED") return 1;
+        return 4;
+      };
+    }
+
+    if (prisma.auditLog) {
+      prisma.auditLog.findMany = async () => [
+        {
+          id: "aud_1",
+          action: "PROJECT_CONNECTED",
+          status: "SUCCESS",
+          resourceType: "Project",
+          resourceId: "proj_ov_1",
+          metadata: { repoName: "next-dashboard" },
+          createdAt: new Date("2026-11-28T08:00:00Z")
+        }
+      ];
+    }
+
+    try {
+      const res = await request(app)
+        .get("/api/dashboard/overview")
+        .set("Authorization", `Bearer ${freeToken}`);
+
+      assert.equal(res.status, 200);
+      assert.equal(res.body.projects.length, 1);
+      assert.equal(res.body.projects[0].framework, "nextjs");
+      assert.equal(res.body.projects[0].hasWebhook, true);
+      assert.equal(res.body.projects[0].webhookSecret, undefined);
+      assert.equal(res.body.projects[0].accessToken, undefined);
+
+      assert.equal(res.body.stats.totalProjects, 1);
+      assert.equal(res.body.stats.totalPreviews, 2);
+      assert.equal(res.body.stats.livePreviews, 1);
+      assert.equal(res.body.stats.errorPreviews, 1);
+      assert.equal(res.body.stats.archivedPreviews, 1);
+      assert.equal(res.body.stats.totalBuilds, 4);
+      assert.equal(res.body.stats.completedBuilds, 3);
+      assert.equal(res.body.stats.failedBuilds, 1);
+      assert.equal(res.body.stats.successRate, 75);
+      assert.equal(res.body.stats.avgBuildDurationSec, 12);
+
+      assert.equal(res.body.recentBuilds.length, 2);
+      assert.equal(res.body.recentBuilds[0].framework, "nextjs");
+      assert.equal(res.body.activity.length, 3);
+      assert.ok(
+        new Date(res.body.activity[0].timestamp).getTime() >=
+          new Date(res.body.activity[1].timestamp).getTime()
+      );
+    } finally {
+      if (prisma.build && origBuildFindMany) prisma.build.findMany = origBuildFindMany;
+      if (prisma.build && origBuildCount) prisma.build.count = origBuildCount;
+      if (prisma.auditLog && origAuditFindMany) prisma.auditLog.findMany = origAuditFindMany;
+    }
+  });
 });

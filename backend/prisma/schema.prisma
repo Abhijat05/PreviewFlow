@@ -57,6 +57,7 @@ model Project {
   user              User              @relation("UserProjects", fields: [userId], references: [id], onDelete: Cascade)
   repoOwner         String
   repoName          String
+  framework         String?
   webhookSecret     String
   accessToken       String?
   webhookId         String?

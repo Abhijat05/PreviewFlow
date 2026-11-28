@@ -12,6 +12,13 @@ import { recordHttpAudit } from "../services/auditService.js";
 const router = express.Router();
 
 const WEBHOOK_TIERS = ["PRO", "ENTERPRISE"];
+const ALLOWED_FRAMEWORKS = new Set(["nextjs", "vite", "node-backend", "static", "dockerfile"]);
+
+function normalizeFramework(raw) {
+  if (typeof raw !== "string") return null;
+  const clean = raw.trim().toLowerCase();
+  return ALLOWED_FRAMEWORKS.has(clean) ? clean : null;
+}
 
 async function defaultRepoAccessVerifier({ repoOwner, repoName, accessToken }) {
   try {
@@ -45,7 +52,7 @@ export function resetRepoAccessVerifier() {
 export async function handleConnectRepo(req, res) {
   try {
     const { user, tier = "FREE", accessToken } = req.sub;
-    const { repoOwner, repoName } = req.body || {};
+    const { repoOwner, repoName, framework } = req.body || {};
 
     // 1. Input validation & slug containment
     if (typeof repoOwner !== "string" || typeof repoName !== "string") {
@@ -54,6 +61,7 @@ export async function handleConnectRepo(req, res) {
 
     const cleanOwner = repoOwner.trim();
     const cleanRepo = repoName.trim();
+    const cleanFramework = normalizeFramework(framework);
 
     if (!cleanOwner || !cleanRepo) {
       return res.status(400).json({ error: "missing_repo_details" });
@@ -119,6 +127,7 @@ export async function handleConnectRepo(req, res) {
         userId: user.id,
         repoOwner: cleanOwner,
         repoName: cleanRepo,
+        ...(cleanFramework ? { framework: cleanFramework } : {}),
         webhookSecret: encryptedWebhookSecret,
         accessToken: encryptedAccessToken
       }

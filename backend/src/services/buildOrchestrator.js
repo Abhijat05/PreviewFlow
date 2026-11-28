@@ -404,12 +404,21 @@ export async function executeBuildJob(
 
         const buildResult =
           typeof rawResult === "string"
-            ? { url: rawResult, containerName: null, port: null, imageName: null, logs: "" }
+            ? { url: rawResult, containerName: null, port: null, imageName: null, logs: "", detectedFramework: null }
             : rawResult || {};
 
         builtContainerName = buildResult.containerName || null;
         builtImageName = buildResult.imageName || null;
         allocatedPort = buildResult.port || null;
+
+        if (buildResult.detectedFramework && buildResult.detectedFramework !== project.framework) {
+          await client.project
+            .update({
+              where: { id: project.id },
+              data: { framework: buildResult.detectedFramework }
+            })
+            .catch(() => {});
+        }
 
         // Gate 3 (Late Completion Guard): Verify build still owns latestBuildId before switching deployment
         await assertJobCanContinue(job.id, previewContext.id, controller.signal, client);
